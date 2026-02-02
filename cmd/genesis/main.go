@@ -47,6 +47,7 @@ func main() {
 	cfg := scaffold.Config{
 		AppName:    result.AppName,
 		ModuleName: result.ModuleName,
+		AddHTTP:    result.AddHTTP,
 		OutputDir:  outputDir,
 	}
 

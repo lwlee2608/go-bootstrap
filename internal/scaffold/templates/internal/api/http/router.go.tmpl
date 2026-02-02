@@ -1,0 +1,30 @@
+package http
+
+import (
+	"{{.ModuleName}}/internal/api/http/handler"
+	"{{.ModuleName}}/internal/api/http/middleware"
+	"github.com/gin-gonic/gin"
+)
+
+type Config struct {
+	Port uint
+}
+
+type Services struct {
+	// Add your services here
+}
+
+func SetupRoute(engine *gin.Engine, srvs *Services) {
+	engine.Use(middleware.RequestLogger())
+	engine.Use(middleware.ErrorHandler())
+
+	healthHandler := handler.NewHealthHandler()
+
+	engine.GET("/health", healthHandler.Check)
+
+	apis := engine.Group("/api/v1")
+	{
+		_ = apis
+		// Add your API routes here
+	}
+}

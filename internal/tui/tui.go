@@ -12,20 +12,23 @@ type state int
 const (
 	inputAppName state = iota
 	inputModuleName
+	inputAddHTTP
 	done
 )
 
 type Result struct {
 	AppName    string
 	ModuleName string
+	AddHTTP    bool
 }
 
 type Model struct {
-	state      state
-	appInput   textinput.Model
-	modInput   textinput.Model
-	result     Result
-	err        error
+	state    state
+	appInput textinput.Model
+	modInput textinput.Model
+	addHTTP  bool
+	result   Result
+	err      error
 }
 
 type Options struct {
@@ -100,12 +103,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.modInput.Value() == "" {
 					return m, nil
 				}
+				m.state = inputAddHTTP
+				m.modInput.Blur()
+				return m, nil
+
+			case inputAddHTTP:
 				m.result = Result{
 					AppName:    m.appInput.Value(),
 					ModuleName: m.modInput.Value(),
+					AddHTTP:    m.addHTTP,
 				}
 				m.state = done
 				return m, tea.Quit
+			}
+
+		case tea.KeyRunes:
+			if m.state == inputAddHTTP {
+				switch string(msg.Runes) {
+				case "y", "Y":
+					m.addHTTP = true
+				case "n", "N":
+					m.addHTTP = false
+				}
 			}
 		}
 	}
@@ -123,23 +142,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	switch m.state {
 	case inputAppName:
-		return fmt.Sprintf(
-			"App name:\n%s\n\n(Tab to complete, Enter to continue, Esc to quit)",
+		return fmt.Sprintf(`App name:
+%s
+
+(Tab to complete, Enter to continue, Esc to quit)`,
 			m.appInput.View(),
 		)
 
 	case inputModuleName:
-		return fmt.Sprintf(
-			"App name: %s\n\nGo module name:\n%s\n\n(Tab to complete, Enter to generate, Esc to quit)",
+		return fmt.Sprintf(`App name: %s
+
+Go module name:
+%s
+
+(Tab to complete, Enter to continue, Esc to quit)`,
 			m.appInput.Value(),
 			m.modInput.View(),
 		)
 
+	case inputAddHTTP:
+		yesNo := "y/N"
+		if m.addHTTP {
+			yesNo = "Y/n"
+		}
+		return fmt.Sprintf(`App name: %s
+Module: %s
+
+Add http scaffolding? [%s]
+
+(y/n to toggle, Enter to generate, Esc to quit)`,
+			m.appInput.Value(),
+			m.modInput.Value(),
+			yesNo,
+		)
+
 	case done:
-		return fmt.Sprintf(
-			"Generating project...\n  App: %s\n  Module: %s\n",
+		return fmt.Sprintf(`Generating project...
+  App: %s
+  Module: %s
+  HTTP Endpoint: %v
+`,
 			m.result.AppName,
 			m.result.ModuleName,
+			m.result.AddHTTP,
 		)
 	}
 	return ""
