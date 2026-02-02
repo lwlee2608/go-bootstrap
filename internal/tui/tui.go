@@ -28,13 +28,21 @@ type Model struct {
 	err        error
 }
 
-func New() Model {
+type Options struct {
+	SuggestedModuleName string
+}
+
+func New(opts Options) Model {
 	appInput := textinput.New()
 	appInput.Placeholder = "myapp"
 	appInput.Focus()
 
 	modInput := textinput.New()
-	modInput.Placeholder = "github.com/user/myapp"
+	if opts.SuggestedModuleName != "" {
+		modInput.SetValue(opts.SuggestedModuleName)
+	} else {
+		modInput.Placeholder = "github.com/user/myapp"
+	}
 
 	return Model{
 		state:    inputAppName,

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/lwlee2608/go-bootstrap/internal/git"
 	"github.com/lwlee2608/go-bootstrap/internal/scaffold"
 	"github.com/lwlee2608/go-bootstrap/internal/tui"
 )
@@ -22,7 +23,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	model := tui.New()
+	suggestedModule := git.DetectModuleName()
+	model := tui.New(tui.Options{SuggestedModuleName: suggestedModule})
 	p := tea.NewProgram(model)
 
 	finalModel, err := p.Run()
