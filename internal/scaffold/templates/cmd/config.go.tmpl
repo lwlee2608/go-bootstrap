@@ -30,7 +30,7 @@ func InitConfig() {
 	viper.SetDefault("log.level", "INFO")
 
 	if err := viper.ReadInConfig(); err != nil {
-		// It's okay if config file is missing, we can rely on env vars
+		panic(err)
 	}
 
 	if err := viper.Unmarshal(&config); err != nil {
