@@ -55,7 +55,8 @@ func Generate(cfg Config) error {
 		if !cfg.AddHTTP {
 			if strings.HasPrefix(relPath, "internal/api/http") ||
 				relPath == "cmd/config.go.tmpl" ||
-				relPath == "cmd/logger.go.tmpl" {
+				relPath == "cmd/logger.go.tmpl" ||
+				relPath == "application.yml.tmpl" {
 				return nil
 			}
 		}
