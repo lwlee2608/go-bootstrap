@@ -14,7 +14,6 @@ import (
 var AppVersion = "dev"
 
 func main() {
-	outputDir := flag.String("output", ".", "output directory for generated project")
 	version := flag.Bool("version", false, "print version")
 	flag.Parse()
 
@@ -22,6 +21,8 @@ func main() {
 		fmt.Printf("genesis %s\n", AppVersion)
 		os.Exit(0)
 	}
+
+	outputDir := "."
 
 	suggestedApp := git.DetectAppName()
 	suggestedModule := git.DetectModuleName()
@@ -46,7 +47,7 @@ func main() {
 	cfg := scaffold.Config{
 		AppName:    result.AppName,
 		ModuleName: result.ModuleName,
-		OutputDir:  *outputDir,
+		OutputDir:  outputDir,
 	}
 
 	if err := scaffold.Generate(cfg); err != nil {
@@ -54,9 +55,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("\nProject created at %s\n", *outputDir)
+	fmt.Println("\nProject created!")
 	fmt.Println("\nNext steps:")
-	fmt.Printf("  cd %s\n", *outputDir)
 	fmt.Println("  make build")
 	fmt.Printf("  ./bin/%s\n", result.AppName)
 }
