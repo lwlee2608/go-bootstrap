@@ -142,14 +142,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	switch m.state {
 	case inputAppName:
-		return fmt.Sprintf(
-			"App name:\n%s\n\n(Tab to complete, Enter to continue, Esc to quit)",
+		return fmt.Sprintf(`App name:
+%s
+
+(Tab to complete, Enter to continue, Esc to quit)`,
 			m.appInput.View(),
 		)
 
 	case inputModuleName:
-		return fmt.Sprintf(
-			"App name: %s\n\nGo module name:\n%s\n\n(Tab to complete, Enter to continue, Esc to quit)",
+		return fmt.Sprintf(`App name: %s
+
+Go module name:
+%s
+
+(Tab to complete, Enter to continue, Esc to quit)`,
 			m.appInput.Value(),
 			m.modInput.View(),
 		)
@@ -159,16 +165,23 @@ func (m Model) View() string {
 		if m.addHTTP {
 			yesNo = "Y/n"
 		}
-		return fmt.Sprintf(
-			"App name: %s\nModule: %s\n\nAdd HTTP REST endpoint GET /health? [%s]\n\n(y/n to toggle, Enter to generate, Esc to quit)",
+		return fmt.Sprintf(`App name: %s
+Module: %s
+
+Add http scaffolding? [%s]
+
+(y/n to toggle, Enter to generate, Esc to quit)`,
 			m.appInput.Value(),
 			m.modInput.Value(),
 			yesNo,
 		)
 
 	case done:
-		return fmt.Sprintf(
-			"Generating project...\n  App: %s\n  Module: %s\n  HTTP Endpoint: %v\n",
+		return fmt.Sprintf(`Generating project...
+  App: %s
+  Module: %s
+  HTTP Endpoint: %v
+`,
 			m.result.AppName,
 			m.result.ModuleName,
 			m.result.AddHTTP,
