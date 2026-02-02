@@ -4,7 +4,7 @@ APP				:= genesis
 VERSION 		?= v0.1.0
 LDFLAGS 		:= -ldflags "-X main.AppVersion=$(VERSION)"
 
-.PHONY: all build clean run test
+.PHONY: all build clean run test install
 
 all: clean build
 
@@ -17,3 +17,6 @@ run:
 	$(GO) run $(LDFLAGS) cmd/$(APP)/*.go
 test:
 	$(GO) test -v ./...
+install: build
+	mkdir -p ~/.local/bin
+	cp bin/$(APP) ~/.local/bin/$(APP)
