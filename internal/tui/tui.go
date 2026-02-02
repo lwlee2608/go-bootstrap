@@ -38,8 +38,9 @@ func New(opts Options) Model {
 	appInput.Focus()
 
 	modInput := textinput.New()
+	modInput.Width = 60
 	if opts.SuggestedModuleName != "" {
-		modInput.SetValue(opts.SuggestedModuleName)
+		modInput.Placeholder = opts.SuggestedModuleName
 	} else {
 		modInput.Placeholder = "github.com/user/myapp"
 	}
@@ -63,7 +64,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = fmt.Errorf("cancelled")
 			return m, tea.Quit
 
-		case tea.KeyEnter, tea.KeyTab:
+		case tea.KeyTab:
+			switch m.state {
+			case inputAppName:
+				if m.appInput.Value() == "" {
+					return m, nil
+				}
+				m.state = inputModuleName
+				m.appInput.Blur()
+				m.modInput.Focus()
+				return m, textinput.Blink
+
+			case inputModuleName:
+				if m.modInput.Value() == "" && m.modInput.Placeholder != "" {
+					m.modInput.SetValue(m.modInput.Placeholder)
+				}
+				return m, nil
+			}
+
+		case tea.KeyEnter:
 			switch m.state {
 			case inputAppName:
 				if m.appInput.Value() == "" {
@@ -108,7 +127,7 @@ func (m Model) View() string {
 
 	case inputModuleName:
 		return fmt.Sprintf(
-			"App name: %s\n\nGo module name:\n%s\n\n(Press Enter to generate, Esc to quit)",
+			"App name: %s\n\nGo module name:\n%s\n\n(Tab to complete, Enter to generate, Esc to quit)",
 			m.appInput.Value(),
 			m.modInput.View(),
 		)

@@ -1,6 +1,9 @@
 package git
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseRemoteURL(t *testing.T) {
 	tests := []struct {
@@ -58,4 +61,16 @@ func TestParseRemoteURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDetectModuleName_Integration(t *testing.T) {
+	got := DetectModuleName()
+	// This test runs in the go-bootstrap repo, so we expect a valid module name
+	if got == "" {
+		t.Skip("Not in a git repo with origin remote")
+	}
+	if !strings.Contains(got, "go-bootstrap") {
+		t.Errorf("DetectModuleName() = %q, expected to contain 'go-bootstrap'", got)
+	}
+	t.Logf("Detected module name: %s", got)
 }
