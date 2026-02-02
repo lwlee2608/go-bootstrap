@@ -29,12 +29,18 @@ type Model struct {
 }
 
 type Options struct {
+	SuggestedAppName    string
 	SuggestedModuleName string
 }
 
 func New(opts Options) Model {
 	appInput := textinput.New()
-	appInput.Placeholder = "myapp"
+	appInput.Width = 40
+	if opts.SuggestedAppName != "" {
+		appInput.Placeholder = opts.SuggestedAppName
+	} else {
+		appInput.Placeholder = "myapp"
+	}
 	appInput.Focus()
 
 	modInput := textinput.New()
@@ -67,13 +73,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyTab:
 			switch m.state {
 			case inputAppName:
-				if m.appInput.Value() == "" {
-					return m, nil
+				if m.appInput.Value() == "" && m.appInput.Placeholder != "" {
+					m.appInput.SetValue(m.appInput.Placeholder)
 				}
-				m.state = inputModuleName
-				m.appInput.Blur()
-				m.modInput.Focus()
-				return m, textinput.Blink
+				return m, nil
 
 			case inputModuleName:
 				if m.modInput.Value() == "" && m.modInput.Placeholder != "" {
@@ -121,7 +124,7 @@ func (m Model) View() string {
 	switch m.state {
 	case inputAppName:
 		return fmt.Sprintf(
-			"App name:\n%s\n\n(Press Enter to continue, Esc to quit)",
+			"App name:\n%s\n\n(Tab to complete, Enter to continue, Esc to quit)",
 			m.appInput.View(),
 		)
 

@@ -1,10 +1,21 @@
 package git
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
+
+// DetectAppName returns the current directory name as the suggested app name.
+func DetectAppName() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(dir)
+}
 
 // DetectModuleName attempts to detect a Go module name from the git remote URL.
 // It runs `git remote -v` and parses the origin URL.

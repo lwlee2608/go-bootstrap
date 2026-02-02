@@ -23,8 +23,12 @@ func main() {
 		os.Exit(0)
 	}
 
+	suggestedApp := git.DetectAppName()
 	suggestedModule := git.DetectModuleName()
-	model := tui.New(tui.Options{SuggestedModuleName: suggestedModule})
+	model := tui.New(tui.Options{
+		SuggestedAppName:    suggestedApp,
+		SuggestedModuleName: suggestedModule,
+	})
 	p := tea.NewProgram(model)
 
 	finalModel, err := p.Run()
