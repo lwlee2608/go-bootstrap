@@ -1,0 +1,49 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"{{.ModuleName}}/internal/api/http"
+	"github.com/joho/godotenv"
+	"github.com/spf13/viper"
+)
+
+type Config struct {
+	Log  LogConfig
+	Http http.Config
+}
+
+var config Config
+
+func InitConfig() {
+	_ = godotenv.Load()
+
+	viper.SetConfigName("application")
+	viper.AddConfigPath(".")
+	viper.SetConfigType("yaml")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
+
+	viper.SetDefault("http.port", 8080)
+	viper.SetDefault("log.level", "INFO")
+
+	if err := viper.ReadInConfig(); err != nil {
+		// It's okay if config file is missing, we can rely on env vars
+	}
+
+	if err := viper.Unmarshal(&config); err != nil {
+		panic(err)
+	}
+
+	initLogger(config.Log.Level)
+
+	if strings.ToUpper(config.Log.Level) == LOG_LEVEL_DEBUG {
+		configJSON, err := json.MarshalIndent(config, "", "  ")
+		if err == nil {
+			fmt.Println("Config loaded:")
+			fmt.Println(string(configJSON))
+		}
+	}
+}

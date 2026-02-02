@@ -48,3 +48,34 @@ func TestGeneratedProjectBuilds(t *testing.T) {
 		t.Errorf("unexpected output: got %q, want %q", string(output), expected)
 	}
 }
+
+func TestGeneratedProjectWithHttpBuilds(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cfg := Config{
+		AppName:    "myapp",
+		ModuleName: "github.com/user/myapp",
+		AddHTTP:    true,
+		OutputDir:  tmpDir,
+	}
+
+	if err := Generate(cfg); err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	// Change to generated project and run make build
+	cmd := exec.Command("make", "build")
+	cmd.Dir = tmpDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("make build failed: %v", err)
+	}
+
+	// Verify binary exists
+	binaryPath := filepath.Join(tmpDir, "bin", "myapp")
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		t.Errorf("binary not created: %s", binaryPath)
+	}
+}
