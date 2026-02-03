@@ -4,9 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g., 0.1.2 or v0.1.2)'
-        required: true
+        description: 'Version to release (e.g., 0.1.2 or v0.1.2, or leave empty for auto-bump patch)'
+        required: false
         type: string
+        default: 'auto'
 
 permissions:
   contents: write
@@ -22,10 +23,34 @@ jobs:
       - name: Validate and normalize version
         id: version
         run: |
-          VERSION="${{ github.event.inputs.version }}"
-          # Remove 'v' prefix if present
-          VERSION="${VERSION#v}"
-          # Add 'v' prefix
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+
+          # Check if auto-bump is requested
+          if [ -z "$INPUT_VERSION" ] || [ "$INPUT_VERSION" = "auto" ]; then
+            echo "Auto-bumping patch version..."
+
+            # Get the latest tag
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            echo "Latest tag: ${LATEST_TAG}"
+
+            # Remove 'v' prefix and parse version
+            LATEST_VERSION="${LATEST_TAG#v}"
+
+            # Split version into major.minor.patch
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+
+            # Increment patch version
+            PATCH=$((PATCH + 1))
+            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            echo "Auto-bumped to: ${VERSION}"
+          else
+            # Use provided version
+            VERSION="$INPUT_VERSION"
+            # Remove 'v' prefix if present
+            VERSION="${VERSION#v}"
+          fi
+
+          # Add 'v' prefix for tag
           TAG="v${VERSION}"
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Will create tag: ${TAG}"
