@@ -30,30 +30,44 @@ if [ "$OS" = "unsupported" ] || [ "$ARCH" = "unsupported" ]; then
     exit 1
 fi
 
+# Check for required tools
+if ! command -v go >/dev/null 2>&1; then
+    echo "Error: Go is not installed. Please install Go 1.23 or later."
+    exit 1
+fi
+
 VERSION=$(curl -sI "https://github.com/$REPO/releases/latest" | grep -i "^location:" | sed 's/.*tag\///' | tr -d '\r\n')
 if [ -z "$VERSION" ]; then
     echo "Error: Could not determine latest version"
     exit 1
 fi
 
-EXT="tar.gz"
-[ "$OS" = "windows" ] && EXT="zip"
-
-URL="https://github.com/$REPO/releases/download/${VERSION}/${BINARY}_${VERSION#v}_${OS}_${ARCH}.${EXT}"
-
-echo "Downloading $BINARY $VERSION for $OS/$ARCH..."
+echo "Installing $BINARY $VERSION for $OS/$ARCH..."
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
-curl -sL "$URL" -o "$TMPDIR/archive.$EXT"
+# Download source tarball
+echo "Downloading source code..."
+curl -sL "https://github.com/$REPO/tarball/${VERSION}" -o "$TMPDIR/source.tar.gz"
 
-if [ "$EXT" = "zip" ]; then
-    unzip -q "$TMPDIR/archive.$EXT" -d "$TMPDIR"
-else
-    tar -xzf "$TMPDIR/archive.$EXT" -C "$TMPDIR"
+# Extract
+tar -xzf "$TMPDIR/source.tar.gz" -C "$TMPDIR"
+
+# Find the extracted directory (format: username-repo-shortsha)
+SRCDIR=$(find "$TMPDIR" -maxdepth 1 -type d -name "*-${REPO#*/}-*" | head -1)
+
+if [ -z "$SRCDIR" ]; then
+    echo "Error: Could not find extracted source directory"
+    exit 1
 fi
 
+# Build
+echo "Building $BINARY..."
+cd "$SRCDIR"
+go build -ldflags "-X main.AppVersion=${VERSION}" -o "$TMPDIR/$BINARY" ./cmd/genesis
+
+# Install
 mkdir -p "$INSTALL_DIR"
 cp "$TMPDIR/$BINARY" "$INSTALL_DIR/$BINARY"
 chmod +x "$INSTALL_DIR/$BINARY"
