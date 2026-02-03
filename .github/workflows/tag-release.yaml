@@ -3,11 +3,15 @@ name: Tag and Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (e.g., 0.1.2 or v0.1.2, or leave empty for auto-bump patch)'
+      bump:
+        description: 'Version bump type'
         required: false
-        type: string
-        default: 'auto'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: 'patch'
 
 permissions:
   contents: write
@@ -20,60 +24,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate and normalize version
-        id: version
-        run: |
-          INPUT_VERSION="${{ github.event.inputs.version }}"
+      - name: Bump version and push tag
+        id: tag
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: ${{ github.event.inputs.bump }}
+          tag_prefix: v
 
-          # Check if auto-bump is requested
-          if [ -z "$INPUT_VERSION" ] || [ "$INPUT_VERSION" = "auto" ]; then
-            echo "Auto-bumping patch version..."
-
-            # Get the latest tag
-            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-            echo "Latest tag: ${LATEST_TAG}"
-
-            # Remove 'v' prefix and parse version
-            LATEST_VERSION="${LATEST_TAG#v}"
-
-            # Split version into major.minor.patch
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
-
-            # Increment patch version
-            PATCH=$((PATCH + 1))
-            VERSION="${MAJOR}.${MINOR}.${PATCH}"
-            echo "Auto-bumped to: ${VERSION}"
-          else
-            # Use provided version
-            VERSION="$INPUT_VERSION"
-            # Remove 'v' prefix if present
-            VERSION="${VERSION#v}"
-          fi
-
-          # Add 'v' prefix for tag
-          TAG="v${VERSION}"
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "Will create tag: ${TAG}"
-
-      - name: Check if tag exists
-        run: |
-          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Error: Tag ${{ steps.version.outputs.tag }} already exists"
-            exit 1
-          fi
-
-      - name: Configure Git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Create and push tag
-        run: |
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.new_tag }}
+          release_name: Release ${{ steps.tag.outputs.new_tag }}
+          body: ${{ steps.tag.outputs.changelog }}
+          draft: false
+          prerelease: false
 
       - name: Summary
         run: |
-          echo "✅ Tag ${{ steps.version.outputs.tag }} created and pushed" >> $GITHUB_STEP_SUMMARY
+          echo "## Release ${{ steps.tag.outputs.new_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The release workflow will now be triggered automatically." >> $GITHUB_STEP_SUMMARY
+          echo "**Previous tag:** ${{ steps.tag.outputs.previous_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Changelog" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.tag.outputs.changelog }}" >> $GITHUB_STEP_SUMMARY
