@@ -32,6 +32,9 @@ jobs:
           default_bump: ${{ github.event.inputs.bump }}
           tag_prefix: v
 
+      - name: Fetch new tag
+        run: git fetch origin tag ${{ steps.tag.outputs.new_tag }} --no-tags
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
