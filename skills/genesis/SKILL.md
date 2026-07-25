@@ -2,6 +2,7 @@
 name: genesis
 description: Use when scaffolding a full-stack project — a Go backend, a React/Vite web frontend, Dockerfiles, docker-compose, a Makefile, sqlc — or deploying the stack to Railway. Refers to reference/project-00 in github.com/lwlee2608/genesis as the canonical template.
 user-invocable: true
+disable-model-invocation: true
 argument-hint: [server | web | docker-compose | Dockerfile | Makefile | sqlc | railway]
 ---
 
