@@ -30,11 +30,13 @@ reference/project-00/
     │   │   └── db/              # migrations, queries, sqlc (generated)
     │   ├── Dockerfile
     │   ├── Makefile
+    │   ├── railway.json        # Railway build/deploy config
     │   └── sqlc.yaml
     └── project-00-web/         # React/Vite/TS app
         ├── src/                # main.tsx, App.tsx
         ├── Dockerfile          # build + nginx serve
         ├── nginx.conf
+        ├── railway.json        # Railway build/deploy config
         └── entrypoint.sh
 ```
 
@@ -62,6 +64,12 @@ Railway project: <app>
 
 **Linking is per-subdirectory.** The Railway CLI keys link state by absolute directory (in `~/.railway/config.json`), so each `services/<app>-*` subdir links to its *own* Railway service within the same project and environment.
 
+### Config as code (`railway.json`)
+
+Builder, watch paths, health check, and restart policy come from each service's `railway.json` (see the template) — config in code overrides dashboard settings. Only **Source**, **Root Directory**, and the **Config as Code** path can't be set there; env vars stay in `railway variables set` so `${{...}}` refs resolve.
+
+Gotcha: the config path does *not* follow Root Directory — set it to the repo-root path `services/<app>-server/railway.json`. `railway up` from the subdir needs no setting; that subdir is the upload root.
+
 ### From scratch
 
 Only `railway login` needs a human (browser, or device code on headless); the rest is scriptable. Create the project and all services first, **in order** — `railway link` can only target a service that already exists, and a reference variable resolves to empty until the service it points at exists: **Postgres before the server** (whose `DB_URL` needs `${{Postgres.DATABASE_URL}}`), then **server before web** (whose `BACKEND_URL` needs `${{<app>-server.RAILWAY_PRIVATE_DOMAIN}}`).
@@ -75,11 +83,11 @@ railway add --database postgres            # FIRST — exposes DATABASE_URL; ${{
 railway add --service <app>-server         # before web — web references ${{<app>-server.RAILWAY_PRIVATE_DOMAIN}}
 railway add --service <app>-web
 
-# link + deploy each service from its own subdir
+# link + deploy each service from its own subdir (each already has its railway.json)
 cd services/<app>-server
 railway link                               # pick the project, environment, and <app>-server service
 railway variables set 'DB_URL=${{Postgres.DATABASE_URL}}'   # append ?sslmode=disable if pgx needs it
-railway up                                 # builds this dir's Dockerfile and deploys
+railway up                                 # uploads this dir; railway.json here picks the Dockerfile builder
 
 cd ../<app>-web
 railway link                               # same project/environment, pick the <app>-web service
@@ -98,12 +106,10 @@ Notes:
 
 ### Connecting GitHub (auto-deploy)
 
-A service created via the CLI is **not connected to GitHub** — it only redeploys on `railway up`. Both the BE (`<app>-server`) and FE (`<app>-web`) services start disconnected and must be wired up. For **each** service, in the Railway dashboard (Service → Settings):
+A service created via the CLI is **not connected to GitHub** — it only redeploys on `railway up`. Both the BE (`<app>-server`) and FE (`<app>-web`) services start disconnected and must be wired up. Once connected, `railway.json` supplies the builder, watch paths, health check, and restart policy, so only three things remain in the dashboard (Service → Settings):
 
 1. **Source** — connect the GitHub repo (`<owner>/<repo>`).
 2. **Root Directory** — set to the service's subdir: `services/<app>-server` for the BE, `services/<app>-web` for the FE.
-3. **Build** — set the builder to **Dockerfile**.
-4. **Watch Paths** — set to the service's subdir (e.g. `services/<app>-server/**`) so only that service rebuilds on a relevant change.
-5. **Restart Policy** — set the number of retries to `1`.
+3. **Config as Code** — set to the repo-root path of that service's file: `services/<app>-server/railway.json` (BE) or `services/<app>-web/railway.json` (FE). Required — this setting does *not* inherit the Root Directory.
 
-CLI equivalent for the source connect (from the linked subdir): `railway service source connect --repo <owner>/<repo> --branch main`. Root Directory, Dockerfile builder, watch path, and restart policy are dashboard settings.
+CLI equivalent for the source connect (from the linked subdir): `railway service source connect --repo <owner>/<repo> --branch main`. Root Directory and the config file path have no CLI or config-as-code equivalent.
