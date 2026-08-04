@@ -87,6 +87,8 @@ railway add --service <app>-web
 cd services/<app>-server
 railway link                               # pick the project, environment, and <app>-server service
 railway variables set 'DB_URL=${{Postgres.DATABASE_URL}}'   # append ?sslmode=disable if pgx needs it
+railway variables set PORT=8080            # pin the target port the healthcheck probes
+railway variables set 'HTTP_PORT=${{PORT}}' # the server reads HTTP_PORT, not PORT
 railway up                                 # uploads this dir; railway.json here picks the Dockerfile builder
 
 cd ../<app>-web
@@ -96,7 +98,9 @@ railway up
 railway domain                             # generate the public URL for web
 ```
 
-The `${{...}}` are Railway reference variables that wire services together — single-quote them so the shell passes them through literally. `PORT` is injected by Railway and the web `entrypoint.sh` auto-derives `DNS_RESOLVER` from the container's resolver, so neither needs setting.
+The `${{...}}` are Railway reference variables that wire services together — single-quote them so the shell passes them through literally. The web `entrypoint.sh` auto-derives `DNS_RESOLVER` from the container's resolver, so that never needs setting.
+
+**The server's port needs both variables.** Its config keys map to env with `.` → `_` (`http.port` → `HTTP_PORT`), so Railway's injected `PORT` alone is ignored and the server would stay on its `application.yml` default while the healthcheck probes elsewhere — failing every deploy. Pinning `PORT=8080` also keeps the web service's `BACKEND_URL=...:8080` correct. The web service needs no such setting: nginx already listens on `${PORT}`.
 
 Notes:
 - **Non-interactive linking:** `railway link` prompts for selections; pass `-p <project> -e production -s <service>` to script it.

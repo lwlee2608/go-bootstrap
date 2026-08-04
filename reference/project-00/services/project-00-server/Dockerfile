@@ -20,4 +20,6 @@ RUN apk add --no-cache ca-certificates
 COPY application.yml /go/bin/application.yml
 COPY --from=build-env /build/app .
 
+EXPOSE 8080
+
 ENTRYPOINT ["/go/bin/app"]
