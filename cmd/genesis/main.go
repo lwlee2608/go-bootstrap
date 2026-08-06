@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lwlee2608/go-bootstrap/internal/git"
+	"github.com/lwlee2608/go-bootstrap/internal/readme"
 	"github.com/lwlee2608/go-bootstrap/internal/scaffold"
 	"github.com/lwlee2608/go-bootstrap/internal/tui"
 )
@@ -55,6 +58,21 @@ func main() {
 	if err := scaffold.Generate(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating project: %v\n", err)
 		os.Exit(1)
+	}
+
+	if result.GenReadme {
+		fmt.Println("\nGenerating README.md with AI...")
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		if err := readme.Generate(ctx, readme.Config{
+			AppName:     result.AppName,
+			ModuleName:  result.ModuleName,
+			Description: result.Description,
+			FullStack:   result.FullStack,
+			OutputDir:   outputDir,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skipping AI README: %v\n", err)
+		}
 	}
 
 	fmt.Println("\nProject created!")

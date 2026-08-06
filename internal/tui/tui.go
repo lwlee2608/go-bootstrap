@@ -16,22 +16,28 @@ const (
 	inputModuleName
 	inputAddHTTP
 	inputFullStack
+	inputGenReadme
+	inputReadmeDesc
 	done
 )
 
 type Result struct {
-	AppName    string
-	ModuleName string
-	AddHTTP    bool
-	FullStack  bool
+	AppName     string
+	ModuleName  string
+	AddHTTP     bool
+	FullStack   bool
+	GenReadme   bool
+	Description string
 }
 
 type Model struct {
 	state     state
 	appInput  textinput.Model
 	modInput  textinput.Model
+	descInput textinput.Model
 	addHTTP   bool
 	fullStack bool
+	genReadme bool
 	result    Result
 	err       error
 }
@@ -59,12 +65,18 @@ func New(opts Options) Model {
 		modInput.Placeholder = "github.com/user/myapp"
 	}
 
+	descInput := textinput.New()
+	descInput.Width = 60
+	descInput.Placeholder = "what does this app do?"
+
 	return Model{
 		state:     inputAppName,
 		appInput:  appInput,
 		modInput:  modInput,
+		descInput: descInput,
 		addHTTP:   true,
 		fullStack: true,
+		genReadme: true,
 	}
 }
 
@@ -119,24 +131,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 
 			case inputFullStack:
-				m.result = Result{
-					AppName:    m.appInput.Value(),
-					ModuleName: m.modInput.Value(),
-					AddHTTP:    m.addHTTP,
-					FullStack:  m.fullStack,
+				m.state = inputGenReadme
+				return m, nil
+
+			case inputGenReadme:
+				if m.genReadme {
+					m.state = inputReadmeDesc
+					m.descInput.Focus()
+					return m, textinput.Blink
 				}
-				m.state = done
-				return m, tea.Quit
+				return m.finish()
+
+			case inputReadmeDesc:
+				return m.finish()
 			}
 
 		case tea.KeySpace, tea.KeyLeft, tea.KeyRight:
 			switch m.state {
 			case inputAddHTTP:
 				m.addHTTP = !m.addHTTP
+				return m, nil
 			case inputFullStack:
 				m.fullStack = !m.fullStack
+				return m, nil
+			case inputGenReadme:
+				m.genReadme = !m.genReadme
+				return m, nil
 			}
-			return m, nil
 
 		case tea.KeyRunes:
 			switch m.state {
@@ -156,6 +177,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.fullStack = false
 				}
 				return m, nil
+			case inputGenReadme:
+				switch string(msg.Runes) {
+				case "y", "Y":
+					m.genReadme = true
+				case "n", "N":
+					m.genReadme = false
+				}
+				return m, nil
 			}
 		}
 	}
@@ -166,8 +195,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appInput, cmd = m.appInput.Update(msg)
 	case inputModuleName:
 		m.modInput, cmd = m.modInput.Update(msg)
+	case inputReadmeDesc:
+		m.descInput, cmd = m.descInput.Update(msg)
 	}
 	return m, cmd
+}
+
+func (m Model) finish() (tea.Model, tea.Cmd) {
+	m.result = Result{
+		AppName:     m.appInput.Value(),
+		ModuleName:  m.modInput.Value(),
+		AddHTTP:     m.addHTTP,
+		FullStack:   m.fullStack,
+		GenReadme:   m.genReadme,
+		Description: m.descInput.Value(),
+	}
+	m.state = done
+	return m, tea.Quit
 }
 
 var (
@@ -208,10 +252,15 @@ func (m Model) help() string {
 	switch m.state {
 	case inputAppName, inputModuleName:
 		return "tab complete · enter continue · esc quit"
-	case inputAddHTTP:
+	case inputReadmeDesc:
+		return "enter generate · esc quit"
+	case inputGenReadme:
+		if !m.genReadme {
+			return "←/→ y/n select · enter generate · esc quit"
+		}
 		return "←/→ y/n select · enter continue · esc quit"
 	default:
-		return "←/→ y/n select · enter generate · esc quit"
+		return "←/→ y/n select · enter continue · esc quit"
 	}
 }
 
@@ -224,7 +273,8 @@ func (m Model) View() string {
 		b.WriteString(stepDone("App name", m.result.AppName) + "\n")
 		b.WriteString(stepDone("Module", m.result.ModuleName) + "\n")
 		b.WriteString(stepDone("HTTP", yesNo(m.result.AddHTTP)) + "\n")
-		b.WriteString(stepDone("Full stack", yesNo(m.result.FullStack)) + "\n\n")
+		b.WriteString(stepDone("Full stack", yesNo(m.result.FullStack)) + "\n")
+		b.WriteString(stepDone("AI README", yesNo(m.result.GenReadme)) + "\n\n")
 		b.WriteString("  Generating project...\n")
 		return b.String()
 	}
@@ -255,13 +305,32 @@ func (m Model) View() string {
 		b.WriteString(stepPending("HTTP scaffolding") + "\n")
 	}
 
-	if m.state == inputFullStack {
+	switch {
+	case m.state == inputFullStack:
 		b.WriteString(stepCurrent("Full stack?   "+yesNoIndicator(m.fullStack)) + "\n")
 		app := m.appInput.Value()
 		b.WriteString(unselectedStyle.Render(fmt.Sprintf(
 			"    nests backend under services/%s-server, adds services/%s-web frontend", app, app)) + "\n")
-	} else {
+	case m.state > inputFullStack:
+		b.WriteString(stepDone("Full stack", yesNo(m.fullStack)) + "\n")
+	default:
 		b.WriteString(stepPending("Full stack") + "\n")
+	}
+
+	switch {
+	case m.state == inputGenReadme:
+		b.WriteString(stepCurrent("Generate AI README?   "+yesNoIndicator(m.genReadme)) + "\n")
+	case m.state > inputGenReadme:
+		b.WriteString(stepDone("AI README", yesNo(m.genReadme)) + "\n")
+	default:
+		b.WriteString(stepPending("AI README") + "\n")
+	}
+
+	if m.state == inputReadmeDesc {
+		b.WriteString(stepCurrent("Short description") + "\n")
+		b.WriteString("    " + m.descInput.View() + "\n")
+	} else if m.state < inputGenReadme || m.genReadme {
+		b.WriteString(stepPending("Description") + "\n")
 	}
 
 	b.WriteString("\n" + unselectedStyle.Render("  "+m.help()) + "\n")
