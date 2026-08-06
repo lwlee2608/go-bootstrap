@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type state int
@@ -127,7 +129,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 
-		case tea.KeySpace:
+		case tea.KeySpace, tea.KeyLeft, tea.KeyRight:
 			switch m.state {
 			case inputAddHTTP:
 				m.addHTTP = !m.addHTTP
@@ -168,77 +170,102 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+var (
+	titleStyle      = lipgloss.NewStyle().Bold(true)
+	checkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	cursorStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	selectedStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	unselectedStyle = lipgloss.NewStyle().Faint(true)
+)
+
 func yesNoIndicator(v bool) string {
 	if v {
-		return "[ Yes ]  No  "
+		return selectedStyle.Render("[ Yes ]") + unselectedStyle.Render("   No  ")
 	}
-	return "  Yes  [ No ]"
+	return unselectedStyle.Render("  Yes  ") + selectedStyle.Render(" [ No ]")
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "Yes"
+	}
+	return "No"
+}
+
+func stepDone(label, value string) string {
+	return fmt.Sprintf("  %s %-11s %s", checkStyle.Render("✓"), label, value)
+}
+
+func stepCurrent(label string) string {
+	return "  " + cursorStyle.Render("▸") + " " + label
+}
+
+func stepPending(label string) string {
+	return unselectedStyle.Render("    " + label)
+}
+
+func (m Model) help() string {
+	switch m.state {
+	case inputAppName, inputModuleName:
+		return "tab complete · enter continue · esc quit"
+	case inputAddHTTP:
+		return "←/→ y/n select · enter continue · esc quit"
+	default:
+		return "←/→ y/n select · enter generate · esc quit"
+	}
 }
 
 func (m Model) View() string {
-	switch m.state {
-	case inputAppName:
-		return fmt.Sprintf(`App name:
-%s
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Genesis — new Go project"))
+	b.WriteString("\n\n")
 
-(Tab to complete, Enter to continue, Esc to quit)`,
-			m.appInput.View(),
-		)
-
-	case inputModuleName:
-		return fmt.Sprintf(`App name: %s
-
-Go module name:
-%s
-
-(Tab to complete, Enter to continue, Esc to quit)`,
-			m.appInput.Value(),
-			m.modInput.View(),
-		)
-
-	case inputAddHTTP:
-		return fmt.Sprintf(`App name: %s
-Module: %s
-
-Add http scaffolding? %s
-
-(y/n or space to toggle, Enter to continue, Esc to quit)`,
-			m.appInput.Value(),
-			m.modInput.Value(),
-			yesNoIndicator(m.addHTTP),
-		)
-
-	case inputFullStack:
-		return fmt.Sprintf(`App name: %s
-Module: %s
-HTTP: %v
-
-Full stack? Nest backend under services/%s-server and scaffold services/%s-web frontend
-%s
-
-(y/n or space to toggle, Enter to generate, Esc to quit)`,
-			m.appInput.Value(),
-			m.modInput.Value(),
-			m.addHTTP,
-			m.appInput.Value(),
-			m.appInput.Value(),
-			yesNoIndicator(m.fullStack),
-		)
-
-	case done:
-		return fmt.Sprintf(`Generating project...
-  App: %s
-  Module: %s
-  HTTP Endpoint: %v
-  Full Stack: %v
-`,
-			m.result.AppName,
-			m.result.ModuleName,
-			m.result.AddHTTP,
-			m.result.FullStack,
-		)
+	if m.state == done {
+		b.WriteString(stepDone("App name", m.result.AppName) + "\n")
+		b.WriteString(stepDone("Module", m.result.ModuleName) + "\n")
+		b.WriteString(stepDone("HTTP", yesNo(m.result.AddHTTP)) + "\n")
+		b.WriteString(stepDone("Full stack", yesNo(m.result.FullStack)) + "\n\n")
+		b.WriteString("  Generating project...\n")
+		return b.String()
 	}
-	return ""
+
+	if m.state == inputAppName {
+		b.WriteString(stepCurrent("App name") + "\n")
+		b.WriteString("    " + m.appInput.View() + "\n")
+	} else {
+		b.WriteString(stepDone("App name", m.appInput.Value()) + "\n")
+	}
+
+	switch {
+	case m.state == inputModuleName:
+		b.WriteString(stepCurrent("Module") + "\n")
+		b.WriteString("    " + m.modInput.View() + "\n")
+	case m.state > inputModuleName:
+		b.WriteString(stepDone("Module", m.modInput.Value()) + "\n")
+	default:
+		b.WriteString(stepPending("Module") + "\n")
+	}
+
+	switch {
+	case m.state == inputAddHTTP:
+		b.WriteString(stepCurrent("Add HTTP scaffolding?   "+yesNoIndicator(m.addHTTP)) + "\n")
+	case m.state > inputAddHTTP:
+		b.WriteString(stepDone("HTTP", yesNo(m.addHTTP)) + "\n")
+	default:
+		b.WriteString(stepPending("HTTP scaffolding") + "\n")
+	}
+
+	if m.state == inputFullStack {
+		b.WriteString(stepCurrent("Full stack?   "+yesNoIndicator(m.fullStack)) + "\n")
+		app := m.appInput.Value()
+		b.WriteString(unselectedStyle.Render(fmt.Sprintf(
+			"    nests backend under services/%s-server, adds services/%s-web frontend", app, app)) + "\n")
+	} else {
+		b.WriteString(stepPending("Full stack") + "\n")
+	}
+
+	b.WriteString("\n" + unselectedStyle.Render("  "+m.help()) + "\n")
+	return b.String()
 }
 
 func (m Model) Result() (Result, error) {
