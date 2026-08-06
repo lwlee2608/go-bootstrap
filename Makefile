@@ -1,7 +1,7 @@
 GO = $(shell which go 2>/dev/null)
 
 APP				:= genesis
-VERSION 		?= v0.2.2
+VERSION 		?= v0.3.0
 LDFLAGS 		:= -ldflags "-X main.AppVersion=$(VERSION)"
 
 .PHONY: all build clean run test install
