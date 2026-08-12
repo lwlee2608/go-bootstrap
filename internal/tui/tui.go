@@ -118,6 +118,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.keyErr = msg.err
 			m.state = inputAPIKey
+			m.keyInput.SetValue("")
 			m.keyInput.Focus()
 			return m, textinput.Blink
 		}
@@ -243,6 +244,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case inputModuleName:
 		m.modInput, cmd = m.modInput.Update(msg)
 	case inputAPIKey:
+		if _, ok := msg.(tea.KeyMsg); ok {
+			m.keyErr = nil
+		}
 		m.keyInput, cmd = m.keyInput.Update(msg)
 	case inputReadmeDesc:
 		m.descInput, cmd = m.descInput.Update(msg)
