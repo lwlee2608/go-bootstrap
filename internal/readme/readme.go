@@ -3,6 +3,7 @@ package readme
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,10 +14,9 @@ import (
 	"github.com/openai/openai-go/v3"
 )
 
-const (
-	model   = "openai/gpt-5.6-luna"
-	baseURL = "https://openrouter.ai/api/v1"
-)
+const model = "openai/gpt-5.6-luna"
+
+var baseURL = "https://openrouter.ai/api/v1"
 
 //go:embed system_prompt.md
 var systemPrompt string
@@ -53,12 +53,25 @@ func ValidateKey(ctx context.Context, apiKey string) error {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return nil
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("key rejected by openrouter")
 	default:
 		return fmt.Errorf("openrouter returned %s", resp.Status)
 	}
+
+	var body struct {
+		Data struct {
+			Limit          *float64 `json:"limit"`
+			LimitRemaining *float64 `json:"limit_remaining"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil
+	}
+	if body.Data.Limit != nil && body.Data.LimitRemaining != nil && *body.Data.LimitRemaining <= 0 {
+		return fmt.Errorf("key has no remaining credit")
+	}
+	return nil
 }
 
 func Generate(ctx context.Context, cfg Config) error {
