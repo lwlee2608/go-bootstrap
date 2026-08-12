@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	model   = "z-ai/glm-4.7"
+	model   = "openai/gpt-5.6-luna"
 	baseURL = "https://openrouter.ai/api/v1"
 )
 
