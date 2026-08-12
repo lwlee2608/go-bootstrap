@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lwlee2608/go-bootstrap/internal/readme"
 )
 
 type state int
@@ -17,6 +20,8 @@ const (
 	inputAddHTTP
 	inputFullStack
 	inputGenReadme
+	checkingKey
+	inputAPIKey
 	inputReadmeDesc
 	done
 )
@@ -28,6 +33,20 @@ type Result struct {
 	FullStack   bool
 	GenReadme   bool
 	Description string
+	APIKey      string
+}
+
+type keyCheckedMsg struct {
+	apiKey string
+	err    error
+}
+
+func validateKeyCmd(apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return keyCheckedMsg{apiKey: apiKey, err: readme.ValidateKey(ctx, apiKey)}
+	}
 }
 
 type Model struct {
@@ -35,9 +54,12 @@ type Model struct {
 	appInput  textinput.Model
 	modInput  textinput.Model
 	descInput textinput.Model
+	keyInput  textinput.Model
 	addHTTP   bool
 	fullStack bool
 	genReadme bool
+	apiKey    string
+	keyErr    error
 	result    Result
 	err       error
 }
@@ -69,11 +91,17 @@ func New(opts Options) Model {
 	descInput.Width = 60
 	descInput.Placeholder = "what does this app do?"
 
+	keyInput := textinput.New()
+	keyInput.Width = 60
+	keyInput.Placeholder = "sk-or-v1-..."
+	keyInput.EchoMode = textinput.EchoPassword
+
 	return Model{
 		state:     inputAppName,
 		appInput:  appInput,
 		modInput:  modInput,
 		descInput: descInput,
+		keyInput:  keyInput,
 		addHTTP:   true,
 		fullStack: true,
 		genReadme: true,
@@ -86,6 +114,20 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case keyCheckedMsg:
+		if msg.err != nil {
+			m.keyErr = msg.err
+			m.state = inputAPIKey
+			m.keyInput.Focus()
+			return m, textinput.Blink
+		}
+		m.apiKey = msg.apiKey
+		m.keyErr = nil
+		m.keyInput.Blur()
+		m.state = inputReadmeDesc
+		m.descInput.Focus()
+		return m, textinput.Blink
+
 	case tea.KeyMsg:
 		switch msg.Type {
 		case tea.KeyCtrlC, tea.KeyEsc:
@@ -136,11 +178,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case inputGenReadme:
 				if m.genReadme {
-					m.state = inputReadmeDesc
-					m.descInput.Focus()
-					return m, textinput.Blink
+					return m.checkKey(readme.EnvKey())
 				}
 				return m.finish()
+
+			case inputAPIKey:
+				if m.keyInput.Value() == "" {
+					m.genReadme = false
+					return m.finish()
+				}
+				return m.checkKey(m.keyInput.Value())
 
 			case inputReadmeDesc:
 				return m.finish()
@@ -195,10 +242,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appInput, cmd = m.appInput.Update(msg)
 	case inputModuleName:
 		m.modInput, cmd = m.modInput.Update(msg)
+	case inputAPIKey:
+		m.keyInput, cmd = m.keyInput.Update(msg)
 	case inputReadmeDesc:
 		m.descInput, cmd = m.descInput.Update(msg)
 	}
 	return m, cmd
+}
+
+func (m Model) checkKey(apiKey string) (tea.Model, tea.Cmd) {
+	if apiKey == "" {
+		m.keyErr = fmt.Errorf("OPENROUTER_API_KEY not set — paste a key to continue")
+		m.state = inputAPIKey
+		m.keyInput.Focus()
+		return m, textinput.Blink
+	}
+	m.state = checkingKey
+	m.keyInput.Blur()
+	return m, validateKeyCmd(apiKey)
 }
 
 func (m Model) finish() (tea.Model, tea.Cmd) {
@@ -209,6 +270,7 @@ func (m Model) finish() (tea.Model, tea.Cmd) {
 		FullStack:   m.fullStack,
 		GenReadme:   m.genReadme,
 		Description: m.descInput.Value(),
+		APIKey:      m.apiKey,
 	}
 	m.state = done
 	return m, tea.Quit
@@ -218,6 +280,7 @@ var (
 	titleStyle      = lipgloss.NewStyle().Bold(true)
 	checkStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	cursorStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
+	errorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	selectedStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("212"))
 	unselectedStyle = lipgloss.NewStyle().Faint(true)
 )
@@ -254,6 +317,13 @@ func (m Model) help() string {
 		return "tab complete · enter continue · esc quit"
 	case inputReadmeDesc:
 		return "enter generate · esc quit"
+	case checkingKey:
+		return "esc quit"
+	case inputAPIKey:
+		if m.keyInput.Value() == "" {
+			return "enter skip AI README · esc quit"
+		}
+		return "enter validate · esc quit"
 	case inputGenReadme:
 		if !m.genReadme {
 			return "←/→ y/n select · enter generate · esc quit"
@@ -324,6 +394,17 @@ func (m Model) View() string {
 		b.WriteString(stepDone("AI README", yesNo(m.genReadme)) + "\n")
 	default:
 		b.WriteString(stepPending("AI README") + "\n")
+	}
+
+	switch m.state {
+	case checkingKey:
+		b.WriteString(stepCurrent("Checking OpenRouter API key...") + "\n")
+	case inputAPIKey:
+		b.WriteString(stepCurrent("OpenRouter API key") + "\n")
+		if m.keyErr != nil {
+			b.WriteString("    " + errorStyle.Render(m.keyErr.Error()) + "\n")
+		}
+		b.WriteString("    " + m.keyInput.View() + "\n")
 	}
 
 	if m.state == inputReadmeDesc {

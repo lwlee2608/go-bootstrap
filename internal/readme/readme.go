@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,10 @@ import (
 	"github.com/openai/openai-go/v3"
 )
 
-const model = "z-ai/glm-4.7"
+const (
+	model   = "z-ai/glm-4.7"
+	baseURL = "https://openrouter.ai/api/v1"
+)
 
 //go:embed system_prompt.md
 var systemPrompt string
@@ -23,15 +27,46 @@ type Config struct {
 	Description string
 	FullStack   bool
 	OutputDir   string
+	APIKey      string
+}
+
+func EnvKey() string {
+	return os.Getenv("OPENROUTER_API_KEY")
+}
+
+func ValidateKey(ctx context.Context, apiKey string) error {
+	if apiKey == "" {
+		return fmt.Errorf("no API key")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/key", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("could not reach openrouter: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("key rejected by openrouter")
+	default:
+		return fmt.Errorf("openrouter returned %s", resp.Status)
+	}
 }
 
 func Generate(ctx context.Context, cfg Config) error {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("OPENROUTER_API_KEY not set")
+	if cfg.APIKey == "" {
+		return fmt.Errorf("no OpenRouter API key")
 	}
 
-	service := aiwire.NewOpenAIService(apiKey, "https://openrouter.ai/api/v1")
+	service := aiwire.NewOpenAIService(cfg.APIKey, baseURL)
 	messages := []openai.ChatCompletionMessageParamUnion{
 		openai.SystemMessage(strings.TrimSpace(systemPrompt)),
 		openai.UserMessage(prompt(cfg)),
