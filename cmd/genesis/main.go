@@ -70,6 +70,7 @@ func main() {
 			Description: result.Description,
 			FullStack:   result.FullStack,
 			OutputDir:   outputDir,
+			APIKey:      result.APIKey,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: skipping AI README: %v\n", err)
 		}
