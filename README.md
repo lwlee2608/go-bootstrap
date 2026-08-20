@@ -2,6 +2,13 @@
 
 A TUI tool for bootstrapping new Go projects.
 
+This repo has two parts:
+
+1. **CLI** — creates the project skeleton for a new project
+2. **Skill** (`skills/genesis`) — a Claude Code skill to apply additional features (server, web, Docker, sqlc, Railway) using `reference/project-00` as the template
+
+Typical workflow: start a new project with the CLI, then use the skill to add features.
+
 ## Installation
 
 ```bash
