@@ -24,7 +24,7 @@ Adds authentication to a genesis project by copying from the auth reference in [
 2. **Ask remaining questions in ONE AskUserQuestion call**, with the recommended option first and marked "(Recommended)":
    - Tier: `basic` | `standard (Recommended)` | `strict`
    - Clients: `browser only (Recommended)` | `also mobile/API consumers`
-   - SSO providers (multiSelect, skip for `basic`): `none (Recommended)` | `google` | `apple`
+   - SSO providers (multiSelect): `google` | `apple` — an empty selection means no SSO. Omit this question only when the tier is already known to be `basic`; if the tier is asked in the same call and the user picks `basic`, ignore the SSO answer.
 3. **Derive the mechanism — do not ask about it:**
    - browser only → cookie (HttpOnly, Secure, SameSite=Lax) + server-side session token in Postgres
    - mobile/API consumers → same cookie flow for the web, plus a token path (JWT access + refresh, or API keys for machine consumers)
