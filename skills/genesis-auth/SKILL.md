@@ -3,7 +3,7 @@ name: genesis-auth
 description: Use when adding authentication to a project scaffolded with genesis — login, sessions, SSO, admin users. Asks for an auth tier (basic/standard/strict), derives the mechanism from requirements, and scaffolds from the reference implementation in github.com/lwlee2608/genesis.
 user-invocable: true
 disable-model-invocation: true
-argument-hint: [basic | standard | strict] [google | apple]...
+argument-hint: "[basic | standard | strict] [google | apple]..."
 ---
 
 # genesis-auth
