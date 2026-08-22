@@ -1,6 +1,6 @@
 ---
 name: genesis-auth
-description: Use when adding authentication to a project scaffolded with genesis — login, sessions, SSO, admin users. Asks for an auth tier (basic/standard/strict), derives the mechanism from requirements, and scaffolds from the reference implementation in github.com/lwlee2608/genesis.
+description: Use when adding authentication to a project scaffolded with genesis — login, sessions, SSO, admin users. Asks for an auth tier (basic/standard/strict), derives the mechanism from requirements, and implements it in place following the project's existing conventions.
 user-invocable: true
 disable-model-invocation: true
 argument-hint: "[basic | standard | strict] [google | apple]..."
@@ -8,7 +8,9 @@ argument-hint: "[basic | standard | strict] [google | apple]..."
 
 # genesis-auth
 
-Adds authentication to a genesis project by copying from the auth reference in [`lwlee2608/genesis`](https://github.com/lwlee2608/genesis). The user picks a tier and states requirements; the skill derives the mechanism — never quiz the user on implementation choices like JWT vs cookie.
+Adds authentication to a genesis project. The user picks a tier and states requirements; the skill derives the mechanism — never quiz the user on implementation choices like JWT vs cookie — then writes the code directly into the target project.
+
+This skill is a guideline, not a copy job. There is no reference implementation to clone: read the target project's existing code and write auth that matches it.
 
 ## Tiers
 
@@ -30,23 +32,36 @@ Adds authentication to a genesis project by copying from the auth reference in [
    - mobile/API consumers → same cookie flow for the web, plus a token path (JWT access + refresh, or API keys for machine consumers)
 4. **Confirm with the derived plan in prose, not more pickers.** Example: "basic tier: seeded admin, cookie sessions in Postgres, no SSO — proceed?" If the user overrides a mechanism (e.g. "actually JWT"), honor it.
 
-## Scaffolding rules
+## Implementation rules
 
-1. **Clone the live repo, never work from memory.** `git clone --depth=1 https://github.com/lwlee2608/genesis /tmp/genesis-template`, then read the auth reference under `/tmp/genesis-template/reference/project-00/services/project-00-server/internal/auth/<tier>/`. The repo evolves; reproducing contents from memory causes drift.
-2. **If the reference for the chosen tier does not exist yet, stop and say so.** List which tiers exist in the clone. Do not improvise an implementation from memory — that defeats the point of the reference.
-3. **Adapt names, keep structure.** Replace `project-00` with the target project's name everywhere (module path, directories, Makefile `APP`), keeping the underscore variant for Postgres identifiers — same rules as the `genesis` skill.
-4. **Wire, don't just copy.** After copying: register the auth routes/middleware in the router, add the migration files under `internal/db/migrations`, add new env vars to `.env.example`, and run `sqlc generate` if queries were added.
+1. **Read the target project before writing anything.** Its router, config struct, migration numbering, and package layout decide the shape of the new code. Match them; do not impose a layout from this document.
+2. **Extend the existing users table, don't invent a parallel one.** A genesis server already ships `internal/db/migrations/0001_create_users.sql` with `password_hash` and a `user_role` enum. Add columns and new tables (sessions, password resets, SSO identities, MFA secrets) in a new numbered migration.
+3. **Follow the established layout** for a genesis server:
+   - `internal/auth/` — password hashing, session/token issue and verify, provider clients. No gin types in here.
+   - `internal/api/http/handler/auth.go` — login, logout, signup, reset endpoints.
+   - `internal/api/http/dto/auth.go` — request/response structs.
+   - `internal/api/http/middleware/auth.go` — session/bearer verification, role checks.
+   - `internal/db/migrations/NNNN_*.sql` — goose `-- +goose Up` / `Down` blocks, both directions.
+   - `internal/db/queries/*.sql` — sqlc named queries; run `sqlc generate` after editing.
+4. **Wire everything.** Register handlers and middleware in `SetupRoute`, add any new dependency to the `Services` struct, and construct it in `main.go`. Auth code that compiles but is never mounted looks done and isn't.
+5. **Config goes through the existing mechanism.** Add fields to the config struct in `cmd/<app>/config.go`, defaults to `application.yml`, and every new key to `.env.example` using the `.` → `_` upper-case form (`auth.session_ttl` → `AUTH_SESSION_TTL`). Never read `os.Getenv` directly.
+6. **Use the standard library and existing deps first.** `golang.org/x/crypto/bcrypt` for passwords, `crypto/rand` for tokens. Add a dependency only when the tier genuinely needs it (JWT, TOTP), and run `go mod tidy`.
+7. **Never log or return secrets.** No password, hash, session token, or reset token in logs or error responses.
 
 ## Verification procedure
 
 1. `make build` passes in the target server.
-2. A migration file exists for every new table the copied code queries.
-3. Every new env var the code reads appears in `.env.example`.
-4. For cookie sessions: the session cookie is set with `HttpOnly` and `SameSite`.
+2. `sqlc generate` is clean and the generated code is committed.
+3. A migration file exists — up *and* down — for every new table or column the code queries.
+4. Every new config key the code reads appears in `.env.example` and `application.yml`.
+5. For cookie sessions: the cookie is set with `HttpOnly`, `Secure`, and `SameSite`.
+6. Session tokens are stored hashed, with an expiry column, and logout deletes the row.
 
 ## Common mistakes to watch for
 
 - **Asking mechanism questions.** Never ask "JWT or cookie?" — derive it from the Clients answer.
 - **Re-asking what arguments already answered.** `/genesis-auth basic` should ask nothing except the final confirmation.
-- **Improvising a missing tier.** If `reference/.../auth/strict` is absent, report it — do not write it from scratch.
-- **Copying without wiring.** Auth code that compiles but is never mounted on the router looks done and isn't.
+- **Copying without wiring.** Routes and middleware that are never mounted on the router.
+- **A second users table.** Extend the one the project already has.
+- **Migrations without a `Down` block**, or editing an already-applied migration instead of adding a new one.
+- **Hand-editing `internal/db/sqlc/`.** It is generated; change the `.sql` query and regenerate.
