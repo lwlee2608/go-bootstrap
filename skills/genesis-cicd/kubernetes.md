@@ -4,7 +4,7 @@ Use this reference only for Kubernetes (GCR, GKE, Helm). It replaces the Kuberne
 
 ## Prerequisites
 
-- Replace both `<release-manifest-sha>` placeholders with the same **verified released commit** of `lwlee2608/release-manifest` before generating the workflow. Verify that commit's action contracts; do not invent a tag or SHA. `resolve` outputs `build`, `retained`, `manifest`; `publish` outputs only `release`, `created`, `url`, not a completed manifest.
+- Replace both `<release-manifest-sha>` placeholders with the same **verified released commit** of `lwlee2608/release-manifest` before generating the workflow. Verify that commit's action contracts; do not invent a tag or SHA. `resolve` outputs `build`, `retained`, and a draft `manifest`; `publish` outputs `release`, `created`, `url`, and the complete published `manifest`. Deployment refs come from that published record, not a caller-side join of build outputs.
 - Inspect the service directories, server Makefile/test target and `VERSION`, Dockerfiles, web `packageManager`, and lockfile. Resolve all `<...>` placeholders from the target project.
 - Require an existing Helm chart. Inspect `Chart.yaml`, templates, and environment values. The example assumes the templates consume complete digest references through `server.image.ref` and `web.image.ref`; verify those keys or adapt to the chart's actual full-reference keys. If it only supports repository/tag, resolve chart adaptation separately. Do not assume the scaffold supplies `helm/`.
 - Confirm chart/values paths, GCP project, cluster, zone or region, namespace, and Helm release name for each environment; these may all differ. Replace the `helm/**` filter with the actual deployment paths. Provision namespaces and registry pull access. Configure `GCR_SA_KEY` for GCR pushes and GKE deployment, GitHub Release write access, and the GitHub `production` environment (also `staging` for release-prod). For unattended CD, environment rules must not require manual approval.
@@ -75,7 +75,6 @@ jobs:
     outputs:
       track: ${{ steps.inputs.outputs.track }}
       build: ${{ steps.resolve.outputs.build }}
-      retained: ${{ steps.resolve.outputs.retained }}
       manifest: ${{ steps.resolve.outputs.manifest }}
       server_commit: ${{ steps.inputs.outputs.server_commit }}
     steps:
@@ -157,8 +156,6 @@ jobs:
       contents: read
     outputs:
       images: ${{ steps.refs.outputs.images }}
-      server_ref: ${{ steps.refs.outputs.server_ref }}
-      web_ref: ${{ steps.refs.outputs.web_ref }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -200,7 +197,6 @@ jobs:
         env:
           SERVER_DIGEST: ${{ steps.server.outputs.digest }}
           WEB_DIGEST: ${{ steps.web.outputs.digest }}
-          RETAINED: ${{ needs.resolve.outputs.retained }}
         run: |
           set -euo pipefail
           server_new= web_new=
@@ -208,11 +204,7 @@ jobs:
           if [[ -n "$WEB_DIGEST" ]]; then web_new="$WEB_IMAGE@$WEB_DIGEST"; fi
           images=$(jq -cn --arg server "$server_new" --arg web "$web_new" \
             '{server:$server,web:$web} | with_entries(select(.value != ""))')
-          refs=$(jq -cn --argjson retained "$RETAINED" --argjson images "$images" '$retained + $images')
-          server_ref=$(jq -er '.server // empty' <<< "$refs")
-          web_ref=$(jq -er '.web // empty' <<< "$refs")
-          test -n "$server_ref" && test -n "$web_ref"
-          printf 'images=%s\nserver_ref=%s\nweb_ref=%s\n' "$images" "$server_ref" "$web_ref" >> "$GITHUB_OUTPUT"
+          printf 'images=%s\n' "$images" >> "$GITHUB_OUTPUT"
 
   publish:
     needs: [resolve, build-image]
@@ -227,8 +219,7 @@ jobs:
       cancel-in-progress: false
     outputs:
       release: ${{ steps.publish.outputs.release }}
-      server_ref: ${{ needs.build-image.outputs.server_ref }}
-      web_ref: ${{ needs.build-image.outputs.web_ref }}
+      manifest: ${{ steps.publish.outputs.manifest }}
     steps:
       - id: publish
         uses: lwlee2608/release-manifest/publish@<release-manifest-sha>
@@ -255,8 +246,8 @@ jobs:
       RELEASE: <prod-helm-release>
       CHART: ./helm
       VALUES: helm/prod-values.yaml
-      SERVER_REF: ${{ needs.publish.outputs.server_ref }}
-      WEB_REF: ${{ needs.publish.outputs.web_ref }}
+      SERVER_REF: ${{ fromJSON(needs.publish.outputs.manifest).images.server.ref }}
+      WEB_REF: ${{ fromJSON(needs.publish.outputs.manifest).images.web.ref }}
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -269,6 +260,8 @@ jobs:
           project_id: ${{ env.GKE_PROJECT }}
       - uses: azure/setup-helm@v4
       - run: |
+          test -n "$SERVER_REF"
+          test -n "$WEB_REF"
           helm upgrade -i "$RELEASE" "$CHART" -n "$NAMESPACE" --values "$VALUES" \
             --set-string "server.image.ref=$SERVER_REF" \
             --set-string "web.image.ref=$WEB_REF" \
@@ -320,4 +313,4 @@ Branch eligibility is centralized in `resolve`; build/publish/deploy all require
 
 ## Verification
 
-Compose each branch model separately, substitute verified project values and action pins, then run `actionlint` with the Blacksmith runner labels allowed. Check the gates for PRs with skipped resolve, bootstrap, each single-service change, service docs, unrelated root docs, Helm-only changes, failed/cancelled prerequisites, partial build failure followed by an unrelated push, and a no-new-images release merge. Confirm only `publish` has `contents: write`, its `images` input contains newly built refs only, and Helm receives both nonempty complete digest refs. No local release-manifest implementation is required.
+Compose each branch model separately, substitute verified project values and action pins, then run `actionlint` with the Blacksmith runner labels allowed. Check the gates for PRs with skipped resolve, bootstrap, each single-service change, service docs, unrelated root docs, Helm-only changes, failed/cancelled prerequisites, partial build failure followed by an unrelated push, and a no-new-images release merge. Confirm only `publish` has `contents: write`, its `images` input contains newly built refs only, and Helm receives both nonempty complete digest refs from the published `manifest` output. No local release-manifest implementation is required.
