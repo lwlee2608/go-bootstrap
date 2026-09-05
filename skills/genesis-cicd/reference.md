@@ -26,7 +26,7 @@ env:
 
 jobs:
   server:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: services/<app>-server
@@ -40,7 +40,7 @@ jobs:
       - run: make test
 
   web:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: services/<app>-web
@@ -59,7 +59,7 @@ jobs:
   build-image:
     needs: [server, web]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -125,6 +125,33 @@ jobs:
     # ...
 ```
 
+## Sticky-disk variant of build-image (only if the user chose it)
+
+Swap the builder and build actions; drop `cache-from`/`cache-to`. One builder holds both images' layers, so one `cache-key` is enough.
+
+```yaml
+      - uses: useblacksmith/setup-docker-builder@v2
+        with:
+          cache-key: <app>-images
+      - uses: docker/login-action@v3
+        # ...
+      - uses: useblacksmith/build-push-action@v2
+        with:
+          context: services/<app>-server
+          push: true
+          provenance: false
+          tags: ${{ env.SERVER_IMAGE }}:latest,${{ env.SERVER_IMAGE }}:${{ github.sha }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+            COMMIT_SHA=${{ github.sha }}
+      - uses: useblacksmith/build-push-action@v2
+        with:
+          context: services/<app>-web
+          push: true
+          provenance: false
+          tags: ${{ env.WEB_IMAGE }}:latest,${{ env.WEB_IMAGE }}:${{ github.sha }}
+```
+
 ## GCR variant
 
 ```yaml
@@ -154,7 +181,7 @@ jobs:
   deploy:
     needs: build-image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v2
@@ -175,7 +202,7 @@ jobs:
   deploy-prod:
     needs: build-image
     if: github.event_name == 'push' && github.ref == 'refs/heads/release'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: production
     steps:
       - uses: actions/checkout@v4
@@ -213,7 +240,7 @@ Only if the server has `//go:build integration` tests. Add to `build-image`'s `n
 
 ```yaml
   store:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: services/<app>-server

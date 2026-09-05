@@ -3,7 +3,7 @@ name: genesis-cicd
 description: Use when adding GitHub Actions CI/CD to a project scaffolded with genesis (services/<app>-server Go API, services/<app>-web pnpm React app). Asks which CD target (Railway, Kubernetes, VM + Overwatcher) and which branch model (main = production, or main = staging + release = production), then writes one ci.yml wired with needs so GitHub renders a single pipeline graph.
 user-invocable: true
 disable-model-invocation: true
-argument-hint: "[railway | kubernetes | overwatcher] [main-prod | release-prod]"
+argument-hint: "[railway | kubernetes | overwatcher] [main-prod | release-prod] [sticky-disk]"
 ---
 
 # genesis-cicd
@@ -18,11 +18,12 @@ web ─────┘
 
 ## Question flow
 
-1. **Read the arguments first.** `railway`/`kubernetes`/`overwatcher` answers the CD target; `main-prod`/`release-prod` answers the branch model. Ask only what is missing.
+1. **Read the arguments first.** `railway`/`kubernetes`/`overwatcher` answers the CD target; `main-prod`/`release-prod` answers the branch model; `sticky-disk` opts into Blacksmith's paid Docker cache. Ask only what is missing.
 2. **Ask the rest in ONE AskUserQuestion call:**
    - CD target: `railway (Recommended)` | `kubernetes` | `overwatcher` (VM running Docker Compose, deployed by the Overwatcher GitHub App)
    - Branch model: `main = production (Recommended)` | `main = staging, release = production`
-3. **Confirm in one sentence, then write.** Example: "kubernetes, main→staging / release→prod, images to GCR — proceed?"
+   - Docker layer cache (skip if no `build-image`): `GitHub Actions cache (Recommended)` — free | `Blacksmith sticky disk` — $0.50/GB/month, persists `RUN --mount=type=cache` too
+3. **Confirm in one sentence, then write.** Example: "kubernetes, main→staging / release→prod, images to GCR, GHA cache — proceed?"
 
 ## Rules
 
@@ -41,11 +42,15 @@ web ─────┘
    - `kubernetes`: `deploy` (staging, on `main`) and `deploy-prod` (on `release`, `environment: production`) with `needs: build-image`, GKE auth + `helm upgrade -i … --set image.tag=${{ github.sha }} --atomic`. Under `main-prod` there is only `deploy-prod`, on `main`.
    - `overwatcher`: no deploy job. Overwatcher listens for `workflow_run` of `ci.yml` on the service's branch and pulls the tag it is configured for. Push both images inside `build-image` — the last job — so `workflow_run(success)` never fires before the image lands. Tell the user to set the service's Workflow field to `ci.yml`.
 
-6. **Tag images `sha` + `latest`, pass `VERSION` and `COMMIT_SHA` build-args, separate `cache-to` scopes per image.** Deploys pin the sha; `latest` is mutable and only for humans and Overwatcher services configured that way.
+6. **Tag images `sha` + `latest`, pass `VERSION` and `COMMIT_SHA` build-args.** Deploys pin the sha; `latest` is mutable and only for humans and Overwatcher services configured that way.
 
-7. **Default to `ubuntu-latest` and GHCR.** GCR only when the user names a GCP project; it needs a service-account JSON secret. Blacksmith runners only if the org already pays for them.
+7. **Run on Blacksmith runners.** `blacksmith-4vcpu-ubuntu-2404` for `server` and `build-image`, `blacksmith-2vcpu-ubuntu-2404` for `web`. Keep upstream `actions/setup-go` / `actions/setup-node` with `cache` on — Blacksmith accelerates the GitHub cache API transparently, and its own `useblacksmith/setup-*` wrappers are deprecated. Runner minutes are billed per minute; no other charge.
 
-8. **Never commit secrets.** GHCR uses `GITHUB_TOKEN` with `packages: write`; anything else is `${{ secrets.* }}` the user adds in repo settings.
+8. **Cache Docker layers with `type=gha`, one scope per image, unless the user chose `sticky-disk`.** `docker/build-push-action` + `cache-from/to: type=gha` is free. `useblacksmith/setup-docker-builder` + `useblacksmith/build-push-action` store the builder disk on a sticky disk billed at $0.50/GB/month (auto-evicted after 7 idle days); its only edge is persisting `RUN --mount=type=cache` between runs. Never mix the two in one job.
+
+9. **Default to GHCR.** GCR only when the user names a GCP project; it needs a service-account JSON secret.
+
+10. **Never commit secrets.** GHCR uses `GITHUB_TOKEN` with `packages: write`; anything else is `${{ secrets.* }}` the user adds in repo settings.
 
 ## Verification procedure
 
@@ -60,3 +65,5 @@ web ─────┘
 - **Forgetting `always()` under `release-prod`** — tests are skipped on `release`, so `build-image` silently never runs there.
 - **Writing a deploy job for Railway or Overwatcher** — both deploy on their own; a helm/ssh job would fight them.
 - **`npm ci` for the web** — ignores `pnpm-lock.yaml`.
+- **Using `useblacksmith/setup-docker-builder` "for speed" without asking** — it silently turns on a per-GB sticky-disk charge.
+- **Sharing one `type=gha` scope between server and web** — each build evicts the other's layers.
