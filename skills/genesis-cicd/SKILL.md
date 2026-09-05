@@ -8,67 +8,61 @@ argument-hint: "[railway | kubernetes | overwatcher] [main-prod | release-prod] 
 
 # genesis-cicd
 
-Adds one `.github/workflows/ci.yml` to a genesis monorepo. CI is the same for every project; the CD tail depends on two answers. Templates live in [reference.md](reference.md).
+Adds one `.github/workflows/ci.yml` to a genesis monorepo. CI is the same for every project; the tail depends on the answers below. Templates live in [reference.md](reference.md).
 
 ```
 changes ──┬──▶ server ──┐
-          └──▶ web ─────┴──▶ build-image ──▶ (CD tail: none | helm deploy | Overwatcher picks it up)
+          └──▶ web ─────┴──▶ build-image ──▶ deploy (kubernetes only)
 ```
 
 ## Question flow
 
-1. **Read the arguments first.** `railway`/`kubernetes`/`overwatcher` answers the CD target; `main-prod`/`release-prod` answers the branch model; `sticky-disk` opts into Blacksmith's paid Docker cache. Ask only what is missing.
+1. **Read the arguments first.** `railway`/`kubernetes`/`overwatcher` is the CD target; `main-prod`/`release-prod` is the branch model; `sticky-disk` opts into Blacksmith's paid Docker cache. Ask only what is missing.
 2. **Ask the rest in ONE AskUserQuestion call:**
    - CD target: `railway (Recommended)` | `kubernetes` | `overwatcher` (VM running Docker Compose, deployed by the Overwatcher GitHub App)
    - Branch model: `main = production (Recommended)` | `main = staging, release = production`
-   - Docker layer cache (skip if no `build-image`): `GitHub Actions cache (Recommended)` — free | `Blacksmith sticky disk` — $0.50/GB/month, persists `RUN --mount=type=cache` too
-3. **Confirm in one sentence, then write.** Example: "kubernetes, main→staging / release→prod, images to GCR, GHA cache — proceed?"
+   - Docker layer cache, only for `kubernetes`/`overwatcher`: `GitHub Actions cache (Recommended)` — free | `Blacksmith sticky disk` — $0.50/GB/month, also persists `RUN --mount=type=cache`
+3. **Confirm in one sentence, then write.** Example: "kubernetes, main→staging / release→prod, GCR, GHA cache — proceed?"
 
 ## Rules
 
 1. **Read the target project first.** Confirm service dir names, `make test` in the server Makefile, `packageManager: pnpm@…` plus `pnpm-lock.yaml` in the web. Never leave `project-00`.
 
-2. **Keep everything in one file joined by `needs:`.** A second workflow chained via `workflow_run` breaks the Actions graph, checks out the default-branch tip unless you pass `head_sha`, and fires for both the push and PR run of the same commit.
+2. **One workflow file, jobs joined by `needs:`.** A second workflow chained via `workflow_run` breaks the Actions graph, checks out the default-branch tip unless you pass `head_sha`, and fires for both the push and PR run of the same commit.
 
-3. **One job per service, `working-directory` defaults, toolchains pinned to repo files** (`go-version-file`, lockfile `cache-dependency-path`, `pnpm/action-setup` reading `packageManager`).
+3. **One test job per service, filtered by a `changes` job (`dorny/paths-filter`).** `server` runs only when `services/<app>-server/**` changed, same for `web`. Never use workflow-level `paths:` for this: a workflow that never starts never reports a status check, so required PR checks hang, whereas a skipped job reports as passing. Keep `paths-ignore: ['docs/**', '**.md']` so doc-only pushes cost nothing.
 
-4. **Filter test jobs per service with a `changes` job (`dorny/paths-filter`), never with workflow-level `paths:`.** `server` runs only when `services/<app>-server/**` changed, same for `web`. A workflow that never starts never reports a status check, so PRs with required checks hang; a skipped job reports as passing. `build-image` therefore gates on `always() && needs.*.result != 'failure' && != 'cancelled'` — `skipped` is not `success`. Keep `paths-ignore` for `docs/**` and `**.md` so doc-only pushes cost zero runner minutes.
+4. **Gate `build-image` on push to a release branch with `always() && needs.*.result != 'failure' && != 'cancelled'`.** `skipped` is not `success`, so plain `needs` fails closed whenever a test job was filtered out. Always build both images even if one service was untouched — deploys pin `image.tag=${{ github.sha }}` for both, and the unchanged image is a cache hit.
 
-5. **Always build both images on a release branch, even if only one service changed.** Deploys pin `image.tag=${{ github.sha }}` for both; skipping one image would need a fallback tag. The unchanged image is a cache hit and costs seconds.
-
-6. **Branch model decides triggers:**
-   - `main-prod`: `push: branches: [main]` + `pull_request`. `build-image` gated on push to `main`.
+5. **Branch model:**
+   - `main-prod`: `push: branches: [main]` + `pull_request`.
    - `release-prod`: `push: branches: [main, release]` + `pull_request`. Test jobs also get `github.ref != 'refs/heads/release'` — a push to `release` is a merge of `main` that already ran every suite on the same tree.
 
-7. **CD target decides the tail:**
-   - `railway`: no deploy job. Railway's GitHub integration builds from the Dockerfile on push; with `release-prod`, point the production environment at `release` and staging at `main`. Skip `build-image` unless the user also wants images in a registry.
-   - `kubernetes`: `deploy` (staging, on `main`) and `deploy-prod` (on `release`, `environment: production`) with `needs: build-image`, GKE auth + `helm upgrade -i … --set image.tag=${{ github.sha }} --atomic`. Under `main-prod` there is only `deploy-prod`, on `main`.
-   - `overwatcher`: no deploy job. Overwatcher listens for `workflow_run` of `ci.yml` on the service's branch and pulls the tag it is configured for. Push both images inside `build-image` — the last job — so `workflow_run(success)` never fires before the image lands. Tell the user to set the service's Workflow field to `ci.yml`.
+6. **CD target:**
+   - `railway`: no `build-image`, no deploy job. Railway builds from the Dockerfile on push; under `release-prod` point its production environment at `release` and staging at `main`.
+   - `kubernetes`: images to GCR (same service-account secret pushes and deploys). `deploy` (staging, on `main`) and `deploy-prod` (on `release`, `environment: production`) run `helm upgrade -i … --set image.tag=${{ github.sha }} --atomic`. Under `main-prod` only `deploy-prod` exists, on `main`.
+   - `overwatcher`: images to GHCR, no deploy job. Overwatcher matches `workflow_run` of `ci.yml` by filename on the service's branch. Push inside `build-image`, the last job, so `workflow_run(success)` never fires before the image lands. Tell the user to set the service's Workflow field to `ci.yml`.
 
-8. **Tag images `sha` + `latest`, pass `VERSION` and `COMMIT_SHA` build-args.** Deploys pin the sha; `latest` is mutable and only for humans and Overwatcher services configured that way.
+7. **Tag images `sha` + `latest`, pass `VERSION` and `COMMIT_SHA` build-args.** Deploys pin the sha; `latest` is mutable.
 
-9. **Run on Blacksmith runners.** `blacksmith-4vcpu-ubuntu-2404` for `server` and `build-image`, `blacksmith-2vcpu-ubuntu-2404` for `web`. Keep upstream `actions/setup-go` / `actions/setup-node` with `cache` on — Blacksmith accelerates the GitHub cache API transparently, and its own `useblacksmith/setup-*` wrappers are deprecated. Runner minutes are billed per minute; no other charge.
+8. **Blacksmith runners:** `blacksmith-4vcpu-ubuntu-2404` for `server` and `build-image`, `blacksmith-2vcpu-ubuntu-2404` elsewhere. Keep upstream `actions/setup-go` / `actions/setup-node` with `cache` on; Blacksmith accelerates the GitHub cache API transparently and its `useblacksmith/setup-*` wrappers are deprecated.
 
-10. **Cache Docker layers with `type=gha`, one scope per image, unless the user chose `sticky-disk`.** `docker/build-push-action` + `cache-from/to: type=gha` is free. `useblacksmith/setup-docker-builder` + `useblacksmith/build-push-action` store the builder disk on a sticky disk billed at $0.50/GB/month (auto-evicted after 7 idle days); its only edge is persisting `RUN --mount=type=cache` between runs. Never mix the two in one job.
+9. **Docker layer cache: `type=gha`, one scope per image, unless the user chose `sticky-disk`.** `useblacksmith/setup-docker-builder` + `useblacksmith/build-push-action` keep the builder on a sticky disk billed per GB; never add them for "speed" without the user opting in, and never mix the two approaches in one job.
 
-11. **Default to GHCR.** GCR only when the user names a GCP project; it needs a service-account JSON secret.
-
-12. **Never commit secrets.** GHCR uses `GITHUB_TOKEN` with `packages: write`; anything else is `${{ secrets.* }}` the user adds in repo settings.
+10. **Never commit secrets.** GHCR uses `GITHUB_TOKEN` with `packages: write`; GCR/GKE need a service-account JSON the user adds in repo settings.
 
 ## Verification procedure
 
 1. `actionlint .github/workflows/ci.yml`, or `python3 -c 'import yaml,sys;yaml.safe_load(open(sys.argv[1]))' .github/workflows/ci.yml`.
 2. `grep -n project-00 .github/workflows/ci.yml` returns nothing.
 3. Run the same steps locally: `go vet ./... && make test`; `pnpm install --frozen-lockfile && pnpm lint && pnpm build`.
-4. First run on the Actions tab shows `changes` fanning out to `server` and `web`, both feeding `build-image` (and deploy jobs, if any) in one graph; on a PR, `build-image` is skipped, not missing.
-5. Push a server-only change: `web` shows skipped, `server` runs. Push a README-only change: no run at all.
+4. On the Actions tab the run is one graph: `changes` → `server`/`web` → `build-image` (→ deploy). On a PR, `build-image` shows skipped, not missing.
+5. A server-only push skips `web`; a README-only push starts no run.
 
 ## Common mistakes to watch for
 
-- **Gating `build-image` on `needs` alone** — pushes images from PR branches.
-- **Forgetting `always()` on `build-image`** — a skipped test job makes `needs` fail closed, so it silently never runs.
+- **Gating `build-image` on `needs` alone** — pushes images from PR branches, and fails closed when a test job is skipped.
 - **Using workflow-level `paths:` instead of the `changes` job** — required PR checks never report and block merging.
 - **Writing a deploy job for Railway or Overwatcher** — both deploy on their own; a helm/ssh job would fight them.
 - **`npm ci` for the web** — ignores `pnpm-lock.yaml`.
-- **Using `useblacksmith/setup-docker-builder` "for speed" without asking** — it silently turns on a per-GB sticky-disk charge.
 - **Sharing one `type=gha` scope between server and web** — each build evicts the other's layers.

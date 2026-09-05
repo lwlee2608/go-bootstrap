@@ -192,7 +192,7 @@ env:
 
 ## CD tail: kubernetes (GKE + Helm)
 
-`deploy` exists only under `release-prod`. Under `main-prod` keep `deploy-prod` with `github.ref == 'refs/heads/main'`.
+Pair with the GCR variant so `GCR_SA_KEY` both pushes and deploys. `deploy` exists only under `release-prod`; under `main-prod` keep `deploy-prod` with `github.ref == 'refs/heads/main'`.
 
 ```yaml
 env:
@@ -256,11 +256,11 @@ No job. Checklist for the user:
 
 ## CD tail: railway
 
-No job. `build-image` is optional. Under `release-prod`, set the Railway production environment's branch to `release` and staging to `main`.
+No `build-image`, no deploy job; the workflow ends at `server`/`web`. Under `release-prod`, set the Railway production environment's branch to `release` and staging to `main`.
 
 ## Optional store job (integration tests against Postgres)
 
-Only if the server has `//go:build integration` tests. Add to `build-image`'s `needs`. Match the image in the repo's `docker-compose.yml`.
+Only if the server has `//go:build integration` tests. Add `store` to `build-image`'s `needs` and to its `result != 'failure'` checks. Match the image in the repo's `docker-compose.yml`.
 
 ```yaml
   store:
