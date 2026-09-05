@@ -38,16 +38,16 @@ Requires a digest-capable Helm chart, GCR/GKE configuration, credentials, and a 
 ## Overwatcher: test and build; deploy externally
 
 ```text
-                ┌────────┐
-             ┌─▶│ server │──┐
-┌─────────┐  │  └────────┘  │  ┌─────────────┐
-│ changes │──┤              ├─▶│ build-image │
-└─────────┘  │  ┌────────┐  │  └─────────────┘
-             └─▶│  web   │──┘
-                └────────┘
+                ┌────────┐    ┌────────────────────┐
+             ┌─▶│ server │───▶│ build-server-image │
+┌─────────┐  │  └────────┘    └────────────────────┘
+│ changes │──┤
+└─────────┘  │  ┌────────┐    ┌────────────────────┐
+             └─▶│  web   │───▶│  build-web-image   │
+                └────────┘    └────────────────────┘
 ```
 
-Outside GitHub Actions (requires a successful `build-image` job):
+Outside GitHub Actions (requires both image-build jobs to succeed):
 
 ```text
 ┌──────────────────────────┐    ┌─────────────┐    ┌─────────────────────┐
@@ -55,9 +55,9 @@ Outside GitHub Actions (requires a successful `build-image` job):
 └──────────────────────────┘    └─────────────┘    └─────────────────────┘
 ```
 
-`server` and `web` run independently when relevant. One `build-image` job builds and pushes **both** images to GHCR on relevant eligible pushes, or every release push. It also depends directly on `changes`.
+`server -> build-server-image` and `web -> build-web-image` are independent paths. Each image job depends directly on `changes` and its own checks, not the other service. Both images are built and pushed to GHCR on relevant eligible pushes, or every release push, so both SHA tags exist for deployment. Checks may intentionally skip under the reference path-filter/release policy. A failed suite or image build does not block the other image path.
 
-There is **no deploy job**. Configure Overwatcher's Workflow field as `ci.yml`, select the deployment branch, and verify that the integration requires a successful push run **and** a successful `build-image` job. Both deployed images must use that run's `head_sha` tags, not mutable branch tags or shared `latest`.
+There is **no deploy job**. Configure Overwatcher's Workflow field as `ci.yml`, select the deployment branch, and verify that the integration requires a successful push run **and both `build-server-image` and `build-web-image` to succeed**. Both deployed images must use that run's `head_sha` tags, not mutable branch tags or shared `latest`. A partial build must not deploy.
 
 ## Railway: test only; build and deploy externally
 
@@ -117,6 +117,6 @@ For Railway and Overwatcher, release checks may skip only with a protected, alre
 
 Missing choices are prompted. Kubernetes and Overwatcher default to GitHub Actions Docker layer caching; add `sticky-disk` only to opt into paid Blacksmith caching. Workflows use Blacksmith runners.
 
-If the server has integration-tagged database tests, an optional `store` job gates the Kubernetes server image build (not the web image build), or Overwatcher's combined image build.
+If the server has integration-tagged database tests, an optional `store` job gates only `build-server-image` for Kubernetes and Overwatcher; the web image build remains independent.
 
 See [SKILL.md](SKILL.md) for generation rules, [kubernetes.md](kubernetes.md) for the full Kubernetes workflow, and [reference.md](reference.md) for Railway/Overwatcher templates and configuration checklists.

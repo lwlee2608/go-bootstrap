@@ -91,14 +91,13 @@ jobs:
       - run: pnpm lint
       - run: pnpm build
 
-  build-image:
-    needs: [changes, server, web]
+  build-server-image:
+    needs: [changes, server]
     if: |
       !cancelled() &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.result == 'success' && needs.changes.outputs.deploy == 'true' &&
-      needs.server.result != 'failure' && needs.server.result != 'cancelled' &&
-      needs.web.result != 'failure' && needs.web.result != 'cancelled'
+      needs.server.result != 'failure' && needs.server.result != 'cancelled'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
@@ -127,6 +126,26 @@ jobs:
           cache-from: type=gha,scope=server
           cache-to: type=gha,scope=server,mode=max
 
+  build-web-image:
+    needs: [changes, web]
+    if: |
+      !cancelled() &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.result == 'success' && needs.changes.outputs.deploy == 'true' &&
+      needs.web.result != 'failure' && needs.web.result != 'cancelled'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: docker/build-push-action@v6
         with:
           context: services/<app>-web
@@ -141,7 +160,7 @@ jobs:
 
 Replace the trigger and job conditions below, preserving the remaining base configuration. This release-test skip requires a protected, promotion-only flow from an already-tested `main` tree. If that guarantee is absent, use `if: needs.changes.outputs.server == 'true' || github.ref == 'refs/heads/release'` for `server` (and the equivalent for `web` and optional `store`) so release pushes run all suites.
 
-Do not add trigger-level path filters: a release promotion must publish its SHA even if only docs changed. On `main`, irrelevant changes still skip `build-image` through the `deploy` output.
+Do not add trigger-level path filters: a release promotion must publish its SHA even if only docs changed. On `main`, irrelevant changes still skip both image jobs through the `deploy` output.
 
 ```yaml
 on:
@@ -159,49 +178,36 @@ jobs:
     if: needs.changes.outputs.web == 'true' && github.ref != 'refs/heads/release'
     # ...
 
-  build-image:
-    needs: [changes, server, web]
+  build-server-image:
+    needs: [changes, server]
     if: |
       !cancelled() &&
       github.event_name == 'push' &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release') &&
       needs.changes.result == 'success' &&
       (needs.changes.outputs.deploy == 'true' || github.ref == 'refs/heads/release') &&
-      needs.server.result != 'failure' && needs.server.result != 'cancelled' &&
+      needs.server.result != 'failure' && needs.server.result != 'cancelled'
+    # ...
+
+  build-web-image:
+    needs: [changes, web]
+    if: |
+      !cancelled() &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release') &&
+      needs.changes.result == 'success' &&
+      (needs.changes.outputs.deploy == 'true' || github.ref == 'refs/heads/release') &&
       needs.web.result != 'failure' && needs.web.result != 'cancelled'
     # ...
 ```
 
-## Sticky-disk variant of build-image (only if the user chose it)
+## Sticky-disk variant (only if the user chose it)
 
-Swap the builder and build actions; drop `cache-from`/`cache-to`. One builder holds both images' layers, so one `cache-key` is enough.
-
-```yaml
-      - uses: useblacksmith/setup-docker-builder@v2
-        with:
-          cache-key: <app>-images
-      - uses: docker/login-action@v3
-        # ...
-      - uses: useblacksmith/build-push-action@v2
-        with:
-          context: services/<app>-server
-          push: true
-          provenance: false
-          tags: ${{ env.SERVER_IMAGE }}:${{ github.ref_name }},${{ env.SERVER_IMAGE }}:${{ github.sha }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.value }}
-            COMMIT_SHA=${{ github.sha }}
-      - uses: useblacksmith/build-push-action@v2
-        with:
-          context: services/<app>-web
-          push: true
-          provenance: false
-          tags: ${{ env.WEB_IMAGE }}:${{ github.ref_name }},${{ env.WEB_IMAGE }}:${{ github.sha }}
-```
+In each image job, replace `docker/setup-buildx-action@v3` with `useblacksmith/setup-docker-builder@v2` and `docker/build-push-action@v6` with `useblacksmith/build-push-action@v2`. Drop `cache-from`/`cache-to`; preserve login, build arguments, and SHA/branch tags. Use separate builder `cache-key` values: `<app>-server` in `build-server-image`, `<app>-web` in `build-web-image`. Never share one sticky cache key between these independent jobs.
 
 ## GCR variant
 
-Replace the image names and registry login below; remove `packages: write` from `build-image` because it no longer publishes to GHCR.
+Replace the image names and registry login below; remove `packages: write` from both image jobs because they no longer publish to GHCR.
 
 ```yaml
 env:
@@ -225,19 +231,19 @@ Kubernetes is no longer a tail on the both-image GHCR pipeline. Use [kubernetes.
 
 No job. Checklist for the user:
 
-1. GitHub App subscribed to `workflow_run` with Actions read permission. Verify it filters completed, successful runs to `event == 'push'` on the configured branch and checks that this run's `build-image` job concluded `success`. A successful workflow with skipped builds must not deploy. If the installed integration cannot check job conclusions, resolve that prerequisite before claiming downstream no-op skipping is supported.
+1. GitHub App subscribed to `workflow_run` with Actions read permission. Verify it filters completed, successful runs to `event == 'push'` on the configured branch and checks that this run's `build-server-image` and `build-web-image` jobs both concluded `success`. A successful workflow with skipped builds must not deploy. If the installed integration cannot check job conclusions, resolve that prerequisite before claiming downstream no-op skipping is supported.
 2. In Overwatcher, set the service's Workflow field to `ci.yml` and its branch (`main`, or `release` for prod under `release-prod`).
 3. Resolve both image tags from that run's `head_sha`. If the integration only supports fixed tags, resolve SHA selection as a prerequisite before enabling deployment. Do not deploy branch aliases or shared `latest`: a later failed/cancelled build may have overwritten only one image's mutable tag, even though the triggering run succeeded.
 
 ## CD tail: railway
 
-No `build-image`, no deploy job; the workflow ends at `server`/`web`. Under `release-prod`, set the Railway production environment's branch to `release` and staging to `main`.
+No image-build jobs, no deploy job; the workflow ends at `server`/`web`. Under `release-prod`, set the Railway production environment's branch to `release` and staging to `main`.
 
 Enable Railway's Wait for CI and configure per-service watch paths for source/build inputs, excluding docs and unrelated files. GitHub job skips do not control Railway's independent push trigger. For production tracking `release`, allow every promotion through the watch configuration, including docs-only promotions; do not apply staging's relevance filter there. Verify these external settings and report anything not configured rather than claiming the YAML alone gates Railway deployment.
 
 ## Optional store job (integration tests against Postgres)
 
-Only if the server has `//go:build integration` tests. For the base workflow, add `store` to `build-image`'s `needs` and both its `result != 'failure'` and `result != 'cancelled'` checks. Apply the same release-test policy as `server` under `release-prod`. Kubernetes instead uses the requested-server gates described in [kubernetes.md](kubernetes.md). Match the image and database environment variable to the target project's tests and `docker-compose.yml`.
+Only if the server has `//go:build integration` tests. For the base workflow, add `store` only to `build-server-image`'s `needs` and both its `result != 'failure'` and `result != 'cancelled'` checks. Keep `build-web-image` independent of store. Apply the same release-test policy as `server` under `release-prod`. Kubernetes instead uses the requested-server gates described in [kubernetes.md](kubernetes.md). Match the image and database environment variable to the target project's tests and `docker-compose.yml`.
 
 ```yaml
   store:
