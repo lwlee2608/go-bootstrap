@@ -1,5 +1,7 @@
 # genesis-cicd reference
 
+These base, release-prod, and build-cache variants serve Railway/Overwatcher. For Kubernetes, use the complete [release-manifest workflow](kubernetes.md) instead; do not apply the base both-image build or release-test skip policies to it.
+
 ## Base ci.yml (main-prod, GHCR)
 
 ```yaml
@@ -217,73 +219,7 @@ env:
 
 ## CD tail: kubernetes (GKE + Helm)
 
-Pair with the GCR variant so `GCR_SA_KEY` both pushes and deploys. `deploy` exists only under `release-prod`; under `main-prod` keep `deploy-prod` with `github.ref == 'refs/heads/main'`.
-
-Prerequisites: the scaffold does not include Helm assets. Require an existing chart, inspect its `Chart.yaml` and environment values, and confirm its server/web image repositories match the published images. Resolve project, cluster, location (zone or region), namespace, and release name for each environment. If a chart is missing, stop and resolve chart creation separately before generating a deploy job. The paths and value keys below are examples: replace them with the verified chart's paths and keys, using per-job environment overrides when targets differ.
-
-Extend the `deploy` filter's positive pattern to include the actual chart and values paths, for example `'{services/<app>-server/**,services/<app>-web/**,.github/workflows/ci.yml,helm/**}'`. Keep `predicate-quantifier: every` and the documentation exclusions. Helm-only changes intentionally build both images so the new commit's SHA tags exist. Do not add Helm-only paths to the service test filters.
-
-```yaml
-env:
-  RELEASE: <app>
-  NAMESPACE: <namespace>
-  GKE_PROJECT: <gcp-project>
-  GKE_ZONE: <zone>
-
-jobs:
-  deploy:
-    needs: build-image
-    if: |
-      !cancelled() && needs.build-image.result == 'success' &&
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
-    concurrency:
-      group: ${{ github.workflow }}-deploy-${{ github.ref }}
-      cancel-in-progress: false
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCR_SA_KEY }}
-      - uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: <staging-cluster>
-          location: ${{ env.GKE_ZONE }}
-          project_id: ${{ env.GKE_PROJECT }}
-      - uses: azure/setup-helm@v4
-      - run: |
-          helm upgrade -i $RELEASE ./helm -n $NAMESPACE --values helm/staging-values.yaml \
-            --set server.image.tag=${{ github.sha }} \
-            --set web.image.tag=${{ github.sha }} \
-            --atomic --timeout 15m
-
-  deploy-prod:
-    needs: build-image
-    if: |
-      !cancelled() && needs.build-image.result == 'success' &&
-      github.event_name == 'push' && github.ref == 'refs/heads/release'
-    concurrency:
-      group: ${{ github.workflow }}-deploy-${{ github.ref }}
-      cancel-in-progress: false
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCR_SA_KEY }}
-      - uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: <prod-cluster>
-          location: ${{ env.GKE_ZONE }}
-          project_id: ${{ env.GKE_PROJECT }}
-      - uses: azure/setup-helm@v4
-      - run: |
-          helm upgrade -i $RELEASE ./helm -n $NAMESPACE --values helm/prod-values.yaml \
-            --set server.image.tag=${{ github.sha }} \
-            --set web.image.tag=${{ github.sha }} \
-            --atomic --timeout 15m
-```
+Kubernetes is no longer a tail on the both-image GHCR pipeline. Use [kubernetes.md](kubernetes.md) for the full workflow, digest-capable Helm prerequisites, fingerprints, selective builds, publication gates, and the merge-to-release production overlay. That workflow calls `lwlee2608/release-manifest/resolve` and `/publish`; do not copy local release-management scripts into the target project.
 
 ## CD tail: overwatcher
 
@@ -301,7 +237,7 @@ Enable Railway's Wait for CI and configure per-service watch paths for source/bu
 
 ## Optional store job (integration tests against Postgres)
 
-Only if the server has `//go:build integration` tests. Add `store` to `build-image`'s `needs` and both its `result != 'failure'` and `result != 'cancelled'` checks. Apply the same release-test policy as `server` under `release-prod`. Match the image and database environment variable to the target project's tests and `docker-compose.yml`.
+Only if the server has `//go:build integration` tests. For the base workflow, add `store` to `build-image`'s `needs` and both its `result != 'failure'` and `result != 'cancelled'` checks. Apply the same release-test policy as `server` under `release-prod`. Kubernetes instead uses the requested-server gates described in [kubernetes.md](kubernetes.md). Match the image and database environment variable to the target project's tests and `docker-compose.yml`.
 
 ```yaml
   store:
