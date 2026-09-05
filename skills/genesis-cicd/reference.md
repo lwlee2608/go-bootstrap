@@ -1,5 +1,7 @@
 # genesis-cicd reference
 
+These base, release-prod, and build-cache variants serve Railway/Overwatcher. For Kubernetes, use the complete [release-manifest workflow](kubernetes.md) instead; do not apply the base both-image build or release-test skip policies to it.
+
 ## Base ci.yml (main-prod, GHCR)
 
 ```yaml
@@ -8,17 +10,14 @@ name: ci
 on:
   push:
     branches: [main]
-    paths-ignore: ['docs/**', '**.md']
   pull_request:
-    paths-ignore: ['docs/**', '**.md']
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
-  packages: write
 
 env:
   SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/<app>-server
@@ -27,17 +26,33 @@ env:
 jobs:
   changes:
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       server: ${{ steps.filter.outputs.server }}
       web: ${{ steps.filter.outputs.web }}
+      deploy: ${{ steps.filter.outputs.deploy }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
         uses: dorny/paths-filter@v3
         with:
+          base: ${{ github.ref }}
+          predicate-quantifier: every
           filters: |
-            server: ['services/<app>-server/**']
-            web: ['services/<app>-web/**']
+            server:
+              - '{services/<app>-server/**,.github/workflows/ci.yml}'
+              - '!**/*.md'
+              - '!**/docs/**'
+            web:
+              - '{services/<app>-web/**,.github/workflows/ci.yml}'
+              - '!**/*.md'
+              - '!**/docs/**'
+            deploy:
+              - '{services/<app>-server/**,services/<app>-web/**,.github/workflows/ci.yml}'
+              - '!**/*.md'
+              - '!**/docs/**'
 
   server:
     needs: changes
@@ -65,6 +80,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: services/<app>-web/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -75,13 +92,17 @@ jobs:
       - run: pnpm build
 
   build-image:
-    needs: [server, web]
+    needs: [changes, server, web]
     if: |
-      always() &&
+      !cancelled() &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.result == 'success' && needs.changes.outputs.deploy == 'true' &&
       needs.server.result != 'failure' && needs.server.result != 'cancelled' &&
       needs.web.result != 'failure' && needs.web.result != 'cancelled'
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -99,7 +120,7 @@ jobs:
           context: services/<app>-server
           push: true
           provenance: false
-          tags: ${{ env.SERVER_IMAGE }}:latest,${{ env.SERVER_IMAGE }}:${{ github.sha }}
+          tags: ${{ env.SERVER_IMAGE }}:${{ github.ref_name }},${{ env.SERVER_IMAGE }}:${{ github.sha }}
           build-args: |
             VERSION=${{ steps.version.outputs.value }}
             COMMIT_SHA=${{ github.sha }}
@@ -111,22 +132,22 @@ jobs:
           context: services/<app>-web
           push: true
           provenance: false
-          tags: ${{ env.WEB_IMAGE }}:latest,${{ env.WEB_IMAGE }}:${{ github.sha }}
+          tags: ${{ env.WEB_IMAGE }}:${{ github.ref_name }},${{ env.WEB_IMAGE }}:${{ github.sha }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
 ```
 
 ## release-prod variant
 
-Replace the trigger, add the release skip to test jobs, and widen the `build-image` branch check.
+Replace the trigger and job conditions below, preserving the remaining base configuration. This release-test skip requires a protected, promotion-only flow from an already-tested `main` tree. If that guarantee is absent, use `if: needs.changes.outputs.server == 'true' || github.ref == 'refs/heads/release'` for `server` (and the equivalent for `web` and optional `store`) so release pushes run all suites.
+
+Do not add trigger-level path filters: a release promotion must publish its SHA even if only docs changed. On `main`, irrelevant changes still skip `build-image` through the `deploy` output.
 
 ```yaml
 on:
   push:
     branches: [main, release]
-    paths-ignore: ['docs/**', '**.md']
   pull_request:
-    paths-ignore: ['docs/**', '**.md']
 
 jobs:
   server:
@@ -139,11 +160,13 @@ jobs:
     # ...
 
   build-image:
-    needs: [server, web]
+    needs: [changes, server, web]
     if: |
-      always() &&
+      !cancelled() &&
       github.event_name == 'push' &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release') &&
+      needs.changes.result == 'success' &&
+      (needs.changes.outputs.deploy == 'true' || github.ref == 'refs/heads/release') &&
       needs.server.result != 'failure' && needs.server.result != 'cancelled' &&
       needs.web.result != 'failure' && needs.web.result != 'cancelled'
     # ...
@@ -164,7 +187,7 @@ Swap the builder and build actions; drop `cache-from`/`cache-to`. One builder ho
           context: services/<app>-server
           push: true
           provenance: false
-          tags: ${{ env.SERVER_IMAGE }}:latest,${{ env.SERVER_IMAGE }}:${{ github.sha }}
+          tags: ${{ env.SERVER_IMAGE }}:${{ github.ref_name }},${{ env.SERVER_IMAGE }}:${{ github.sha }}
           build-args: |
             VERSION=${{ steps.version.outputs.value }}
             COMMIT_SHA=${{ github.sha }}
@@ -173,16 +196,20 @@ Swap the builder and build actions; drop `cache-from`/`cache-to`. One builder ho
           context: services/<app>-web
           push: true
           provenance: false
-          tags: ${{ env.WEB_IMAGE }}:latest,${{ env.WEB_IMAGE }}:${{ github.sha }}
+          tags: ${{ env.WEB_IMAGE }}:${{ github.ref_name }},${{ env.WEB_IMAGE }}:${{ github.sha }}
 ```
 
 ## GCR variant
+
+Replace the image names and registry login below; remove `packages: write` from `build-image` because it no longer publishes to GHCR.
 
 ```yaml
 env:
   SERVER_IMAGE: gcr.io/<gcp-project>/<app>-server
   WEB_IMAGE: gcr.io/<gcp-project>/<app>-web
-# ...
+```
+
+```yaml
       - uses: docker/login-action@v3
         with:
           registry: gcr.io
@@ -192,75 +219,25 @@ env:
 
 ## CD tail: kubernetes (GKE + Helm)
 
-Pair with the GCR variant so `GCR_SA_KEY` both pushes and deploys. `deploy` exists only under `release-prod`; under `main-prod` keep `deploy-prod` with `github.ref == 'refs/heads/main'`.
-
-```yaml
-env:
-  RELEASE: <app>
-  NAMESPACE: <namespace>
-  GKE_PROJECT: <gcp-project>
-  GKE_ZONE: <zone>
-
-jobs:
-  deploy:
-    needs: build-image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCR_SA_KEY }}
-      - uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: <staging-cluster>
-          location: ${{ env.GKE_ZONE }}
-          project_id: ${{ env.GKE_PROJECT }}
-      - uses: azure/setup-helm@v4
-      - run: |
-          helm upgrade -i $RELEASE ./helm -n $NAMESPACE --values helm/staging-values.yaml \
-            --set server.image.tag=${{ github.sha }} \
-            --set web.image.tag=${{ github.sha }} \
-            --atomic --timeout 15m
-
-  deploy-prod:
-    needs: build-image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    environment: production
-    steps:
-      - uses: actions/checkout@v4
-      - uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCR_SA_KEY }}
-      - uses: google-github-actions/get-gke-credentials@v2
-        with:
-          cluster_name: <prod-cluster>
-          location: ${{ env.GKE_ZONE }}
-          project_id: ${{ env.GKE_PROJECT }}
-      - uses: azure/setup-helm@v4
-      - run: |
-          helm upgrade -i $RELEASE ./helm -n $NAMESPACE --values helm/prod-values.yaml \
-            --set server.image.tag=${{ github.sha }} \
-            --set web.image.tag=${{ github.sha }} \
-            --atomic --timeout 15m
-```
+Kubernetes is no longer a tail on the both-image GHCR pipeline. Use [kubernetes.md](kubernetes.md) for the full workflow, digest-capable Helm prerequisites, fingerprints, selective builds, publication gates, and the merge-to-release production overlay. That workflow calls `lwlee2608/release-manifest/resolve` and `/publish`; do not copy local release-management scripts into the target project.
 
 ## CD tail: overwatcher
 
 No job. Checklist for the user:
 
-1. GitHub App subscribed to `workflow_run` with Actions read permission.
+1. GitHub App subscribed to `workflow_run` with Actions read permission. Verify it filters completed, successful runs to `event == 'push'` on the configured branch and checks that this run's `build-image` job concluded `success`. A successful workflow with skipped builds must not deploy. If the installed integration cannot check job conclusions, resolve that prerequisite before claiming downstream no-op skipping is supported.
 2. In Overwatcher, set the service's Workflow field to `ci.yml` and its branch (`main`, or `release` for prod under `release-prod`).
-3. Service `tag` matches what `build-image` pushes: `latest` or the commit sha.
+3. Resolve both image tags from that run's `head_sha`. If the integration only supports fixed tags, resolve SHA selection as a prerequisite before enabling deployment. Do not deploy branch aliases or shared `latest`: a later failed/cancelled build may have overwritten only one image's mutable tag, even though the triggering run succeeded.
 
 ## CD tail: railway
 
 No `build-image`, no deploy job; the workflow ends at `server`/`web`. Under `release-prod`, set the Railway production environment's branch to `release` and staging to `main`.
 
+Enable Railway's Wait for CI and configure per-service watch paths for source/build inputs, excluding docs and unrelated files. GitHub job skips do not control Railway's independent push trigger. For production tracking `release`, allow every promotion through the watch configuration, including docs-only promotions; do not apply staging's relevance filter there. Verify these external settings and report anything not configured rather than claiming the YAML alone gates Railway deployment.
+
 ## Optional store job (integration tests against Postgres)
 
-Only if the server has `//go:build integration` tests. Add `store` to `build-image`'s `needs` and to its `result != 'failure'` checks. Match the image in the repo's `docker-compose.yml`.
+Only if the server has `//go:build integration` tests. For the base workflow, add `store` to `build-image`'s `needs` and both its `result != 'failure'` and `result != 'cancelled'` checks. Apply the same release-test policy as `server` under `release-prod`. Kubernetes instead uses the requested-server gates described in [kubernetes.md](kubernetes.md). Match the image and database environment variable to the target project's tests and `docker-compose.yml`.
 
 ```yaml
   store:
