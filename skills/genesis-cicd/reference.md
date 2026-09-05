@@ -25,7 +25,23 @@ env:
   WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/<app>-web
 
 jobs:
+  changes:
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            server: ['services/<app>-server/**']
+            web: ['services/<app>-web/**']
+
   server:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
@@ -40,6 +56,8 @@ jobs:
       - run: make test
 
   web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: blacksmith-2vcpu-ubuntu-2404
     defaults:
       run:
@@ -58,7 +76,11 @@ jobs:
 
   build-image:
     needs: [server, web]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      always() &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.server.result != 'failure' && needs.server.result != 'cancelled' &&
+      needs.web.result != 'failure' && needs.web.result != 'cancelled'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
@@ -96,7 +118,7 @@ jobs:
 
 ## release-prod variant
 
-Replace the trigger, add the skip on test jobs, and widen the `build-image` gate.
+Replace the trigger, add the release skip to test jobs, and widen the `build-image` branch check.
 
 ```yaml
 on:
@@ -108,10 +130,12 @@ on:
 
 jobs:
   server:
-    if: github.ref != 'refs/heads/release'
+    needs: changes
+    if: needs.changes.outputs.server == 'true' && github.ref != 'refs/heads/release'
     # ...
   web:
-    if: github.ref != 'refs/heads/release'
+    needs: changes
+    if: needs.changes.outputs.web == 'true' && github.ref != 'refs/heads/release'
     # ...
 
   build-image:
@@ -240,6 +264,8 @@ Only if the server has `//go:build integration` tests. Add to `build-image`'s `n
 
 ```yaml
   store:
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     defaults:
       run:
