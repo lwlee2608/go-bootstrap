@@ -10,11 +10,9 @@ argument-hint: "[railway | kubernetes | overwatcher] [main-prod | release-prod] 
 
 Adds one `.github/workflows/ci.yml` to a genesis monorepo. Railway and Overwatcher templates live in [reference.md](reference.md); Kubernetes uses [kubernetes.md](kubernetes.md) with the external `lwlee2608/release-manifest` actions.
 
-```
-Kubernetes: changes -> resolve -> server/web -> build-image -> publish -> deploy
-Overwatcher: changes -> server/web -> build-image
-Railway: changes -> server/web
-```
+- Kubernetes: after `changes -> resolve`, independent `server -> build-server-image` and `web -> build-web-image` paths join at `publish -> deploy`.
+- Overwatcher: `changes -> server/web -> build-image`.
+- Railway: `changes -> server/web`.
 
 ## Question flow
 
@@ -36,7 +34,7 @@ Railway: changes -> server/web
 
 3. **One test job per service.** For Railway/Overwatcher and Kubernetes PRs, filter suites through `changes` (`dorny/paths-filter`). Grant it `contents: read` and `pull-requests: read`; use `base: ${{ github.ref }}`. Service changes run that suite; changes to `ci.yml` run both. Exclude documentation in these job filters, not the workflow trigger: both `paths:` and `paths-ignore:` can leave required PR checks pending. `changes` also reports deployment relevance; include actual chart/values paths and shared inputs. Kubernetes pushes instead test every image requested by `resolve`, including changes not yet published after a failed build. Explicit job status gates must allow PR tests when `resolve` is intentionally skipped.
 
-4. **Gate downstream work on relevance and successful prerequisites, not skipped tests alone.** Overwatcher retains the base `build-image` gate and builds both images when relevant, or on every release push. Kubernetes runs `resolve` on every eligible push, compares caller-computed fingerprints with that track's published baseline, and builds only requested images. Require successful change detection/resolution, successful requested suites, and intentionally skipped unrequested suites. The build job also runs with no builds for Helm changes or a release merge so retained references can reach publication. `publish` requires the build job's success; `deploy` requires publication success. Never let PRs publish or deploy.
+4. **Gate downstream work on relevance and successful prerequisites, not skipped tests alone.** Overwatcher retains the base `build-image` gate and builds both images when relevant, or on every release push. Kubernetes runs `resolve` on every eligible push, compares caller-computed fingerprints with that track's published baseline, and builds only requested images. Each image job requires successful resolution and its own suite, independently of the other suite. `publish` requires successful change detection/resolution, relevance (requested builds, deployment changes, or a release push), success for each requested image job, and skipped status for each unrequested image job. Both image jobs skip with no requested builds; Helm changes and release pushes still publish retained references. A failed suite can leave the other image already pushed, but publication is blocked. Optional store tests gate only `build-server-image`; publish enforces them through that build's success. `deploy` requires publication success. Never let PRs publish or deploy.
 
 5. **Branch model:**
    - `main-prod`: `push: branches: [main]` + `pull_request`.
@@ -49,11 +47,11 @@ Railway: changes -> server/web
 
 7. **Never deploy shared `latest`.** Overwatcher retains SHA/branch tags and must select both images using the successful run's `head_sha`; fixed-tag-only integrations need that prerequisite resolved. Kubernetes uses unique run/attempt build tags only to push, then records/deploys `repository@sha256:...`. Fingerprints cover the full service context, workflow, and all build inputs/arguments. Use a stable build-input commit for server `COMMIT_SHA` and include it in the fingerprint, not the current unrelated workflow SHA. Whole-context docs can trigger rebuilds; root docs outside build inputs do not. Do not copy the abandoned Python release manager into generated projects.
 
-8. **Blacksmith runners:** `blacksmith-4vcpu-ubuntu-2404` for `server` and `build-image`, `blacksmith-2vcpu-ubuntu-2404` elsewhere. Keep upstream `actions/setup-go` / `actions/setup-node` with `cache` on; Blacksmith accelerates the GitHub cache API transparently and its `useblacksmith/setup-*` wrappers are deprecated.
+8. **Blacksmith runners:** `blacksmith-4vcpu-ubuntu-2404` for `server`, Overwatcher's `build-image`, and Kubernetes' `build-server-image` and `build-web-image`; `blacksmith-2vcpu-ubuntu-2404` elsewhere. Keep upstream `actions/setup-go` / `actions/setup-node` with `cache` on; Blacksmith accelerates the GitHub cache API transparently and its `useblacksmith/setup-*` wrappers are deprecated.
 
-9. **Docker layer cache: `type=gha`, one scope per image, unless the user chose `sticky-disk`.** `useblacksmith/setup-docker-builder` + `useblacksmith/build-push-action` keep the builder on a sticky disk billed per GB; never add them for "speed" without the user opting in, and never mix the two approaches in one job.
+9. **Docker layer cache: `type=gha`, one scope per image, unless the user chose `sticky-disk`.** `useblacksmith/setup-docker-builder` + `useblacksmith/build-push-action` keep the builder on a sticky disk billed per GB; never add them for "speed" without the user opting in, and never mix the two approaches in one job. For Kubernetes, replace the builder in each image job and use separate sticky cache keys `<app>-server` and `<app>-web`; job gates make per-step requested-image conditions unnecessary.
 
-10. **Never commit secrets.** GHCR uses `GITHUB_TOKEN` with `packages: write` only on `build-image`; test jobs remain read-only. Kubernetes grants `contents: write` only to `publish`; resolution needs `contents: read`. GCR/GKE need a service-account JSON the user adds in repo settings.
+10. **Never commit secrets.** GHCR uses `GITHUB_TOKEN` with `packages: write` only on `build-image`; test jobs remain read-only. Kubernetes grants `contents: write` only to `publish`; resolution needs `contents: read`. GCR/GKE need a service-account JSON the user adds in repo settings. Kubernetes registry-auth jobs export scalar digests, not JSON: multiline secret masking can suppress JSON job outputs. Assemble newly built refs in publish's `images` step; the publish action supplies retained refs.
 
 ## Verification procedure
 
@@ -61,7 +59,7 @@ Railway: changes -> server/web
 2. `grep -n project-00 .github/workflows/ci.yml` returns nothing.
 3. Run the same steps locally: `go vet ./... && make test`; `pnpm install --frozen-lockfile && pnpm lint && pnpm build`.
 4. Verify the selected target's single job graph. Kubernetes PR tests must work with skipped resolve; all write/deploy jobs must skip. Do not claim live verification without an observed Actions run.
-5. Kubernetes: verify bootstrap builds both, a server-only change retains web, Helm-only changes deploy retained digests, and an unrelated push retries unpublished changes after a failed build. Healthy root-docs-only main pushes do not publish/deploy. Failed/cancelled prerequisites block publication. Check both cache variants and optional store gates.
+5. Kubernetes: verify bootstrap builds both and each image starts after its own suite without waiting for the other. A server-only change retains web; Helm-only changes skip both image jobs but publish/deploy retained digests. An unrelated push retries unpublished changes after a failed build. Healthy root-docs-only main pushes skip both image jobs and do not publish/deploy. Failed/cancelled requested suites or builds block publication even if the other image was pushed. Check scalar digest outputs and publish-side JSON assembly, both cache variants with separate per-image caches, and optional store gates that block only the server build and publication, not web.
 6. Kubernetes `release-prod`: merging main into release automatically uses the production baseline, tests/builds requested release-branch images, and deploys both published digests. Verify the no-new-images release path and publication/Helm failure recovery in `kubernetes.md`.
 7. Railway/Overwatcher: retain the reference's behavior checks, including both-image SHA builds for Overwatcher and external no-op/deployment configuration. Do not infer external CD behavior from GitHub job skips.
 
@@ -71,7 +69,7 @@ Railway: changes -> server/web
 - **Accepting skipped requested tests** - skipped must mean an intentionally retained image, not a failed dependency.
 - **Deploying both images with the current SHA in Kubernetes** - unchanged images retain older digests, not the current commit's tag.
 - **Using workflow-level `paths:` or `paths-ignore:` on PRs** - required PR checks never report and block merging.
-- **Treating workflow success as proof images were published** - no-op and PR runs can succeed with `build-image` skipped.
+- **Treating workflow success as proof images were published** - no-op and PR runs can succeed with image jobs skipped; Kubernetes Helm-only and no-new-images release pushes can publish retained refs with both image jobs skipped.
 - **Writing a deploy job for Railway or Overwatcher** — both deploy on their own; a helm/ssh job would fight them.
 - **`npm ci` for the web** — ignores `pnpm-lock.yaml`.
 - **Sharing one `type=gha` scope between server and web** — each build evicts the other's layers.

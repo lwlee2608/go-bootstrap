@@ -141,36 +141,28 @@ jobs:
       - run: pnpm lint
       - run: pnpm build
 
-  build-image:
-    needs: [changes, resolve, server, web]
+  build-server-image:
+    needs: [resolve, server]
     if: |
       !cancelled() && github.event_name == 'push' &&
-      needs.changes.result == 'success' && needs.resolve.result == 'success' &&
-      (needs.resolve.outputs.build != '[]' || needs.changes.outputs.deploy == 'true' || github.ref == 'refs/heads/release') &&
-      ((contains(fromJSON(needs.resolve.outputs.build), 'server') && needs.server.result == 'success') ||
-       (!contains(fromJSON(needs.resolve.outputs.build), 'server') && needs.server.result == 'skipped')) &&
-      ((contains(fromJSON(needs.resolve.outputs.build), 'web') && needs.web.result == 'success') ||
-       (!contains(fromJSON(needs.resolve.outputs.build), 'web') && needs.web.result == 'skipped'))
+      needs.resolve.result == 'success' && needs.server.result == 'success' &&
+      contains(fromJSON(needs.resolve.outputs.build), 'server')
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
     outputs:
-      images: ${{ steps.refs.outputs.images }}
+      digest: ${{ steps.server.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-        if: needs.resolve.outputs.build != '[]'
       - uses: docker/login-action@v3
-        if: needs.resolve.outputs.build != '[]'
         with:
           registry: gcr.io
           username: _json_key
           password: ${{ secrets.GCR_SA_KEY }}
       - id: version
-        if: contains(fromJSON(needs.resolve.outputs.build), 'server')
         run: echo "value=$(cat services/<app>-server/VERSION)" >> "$GITHUB_OUTPUT"
       - id: server
-        if: contains(fromJSON(needs.resolve.outputs.build), 'server')
         uses: docker/build-push-action@v6
         with:
           context: services/<app>-server
@@ -182,8 +174,27 @@ jobs:
             COMMIT_SHA=${{ needs.resolve.outputs.server_commit }}
           cache-from: type=gha,scope=server
           cache-to: type=gha,scope=server,mode=max
+
+  build-web-image:
+    needs: [resolve, web]
+    if: |
+      !cancelled() && github.event_name == 'push' &&
+      needs.resolve.result == 'success' && needs.web.result == 'success' &&
+      contains(fromJSON(needs.resolve.outputs.build), 'web')
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.web.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: gcr.io
+          username: _json_key
+          password: ${{ secrets.GCR_SA_KEY }}
       - id: web
-        if: contains(fromJSON(needs.resolve.outputs.build), 'web')
         uses: docker/build-push-action@v6
         with:
           context: services/<app>-web
@@ -192,25 +203,17 @@ jobs:
           tags: ${{ env.WEB_IMAGE }}:build-${{ github.run_id }}-${{ github.run_attempt }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
-      - id: refs
-        shell: bash
-        env:
-          SERVER_DIGEST: ${{ steps.server.outputs.digest }}
-          WEB_DIGEST: ${{ steps.web.outputs.digest }}
-        run: |
-          set -euo pipefail
-          server_new= web_new=
-          if [[ -n "$SERVER_DIGEST" ]]; then server_new="$SERVER_IMAGE@$SERVER_DIGEST"; fi
-          if [[ -n "$WEB_DIGEST" ]]; then web_new="$WEB_IMAGE@$WEB_DIGEST"; fi
-          images=$(jq -cn --arg server "$server_new" --arg web "$web_new" \
-            '{server:$server,web:$web} | with_entries(select(.value != ""))')
-          printf 'images=%s\n' "$images" >> "$GITHUB_OUTPUT"
 
   publish:
-    needs: [resolve, build-image]
+    needs: [changes, resolve, build-server-image, build-web-image]
     if: |
       !cancelled() && github.event_name == 'push' &&
-      needs.resolve.result == 'success' && needs.build-image.result == 'success'
+      needs.changes.result == 'success' && needs.resolve.result == 'success' &&
+      (needs.resolve.outputs.build != '[]' || needs.changes.outputs.deploy == 'true' || github.ref == 'refs/heads/release') &&
+      ((contains(fromJSON(needs.resolve.outputs.build), 'server') && needs.build-server-image.result == 'success') ||
+       (!contains(fromJSON(needs.resolve.outputs.build), 'server') && needs.build-server-image.result == 'skipped')) &&
+      ((contains(fromJSON(needs.resolve.outputs.build), 'web') && needs.build-web-image.result == 'success') ||
+       (!contains(fromJSON(needs.resolve.outputs.build), 'web') && needs.build-web-image.result == 'skipped'))
     runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write
@@ -221,12 +224,26 @@ jobs:
       release: ${{ steps.publish.outputs.release }}
       manifest: ${{ steps.publish.outputs.manifest }}
     steps:
+      # Assemble JSON here: multiline registry secrets can mask braces in build job outputs.
+      - id: images
+        shell: bash
+        env:
+          SERVER_DIGEST: ${{ needs.build-server-image.outputs.digest }}
+          WEB_DIGEST: ${{ needs.build-web-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          server_new= web_new=
+          if [[ -n "$SERVER_DIGEST" ]]; then server_new="$SERVER_IMAGE@$SERVER_DIGEST"; fi
+          if [[ -n "$WEB_DIGEST" ]]; then web_new="$WEB_IMAGE@$WEB_DIGEST"; fi
+          images=$(jq -cn --arg server "$server_new" --arg web "$web_new" \
+            '{server:$server,web:$web} | with_entries(select(.value != ""))')
+          printf 'images=%s\n' "$images" >> "$GITHUB_OUTPUT"
       - id: publish
         uses: lwlee2608/release-manifest/publish@<release-manifest-sha>
         with:
           track: ${{ needs.resolve.outputs.track }}
           manifest: ${{ needs.resolve.outputs.manifest }}
-          images: ${{ needs.build-image.outputs.images }}
+          images: ${{ steps.images.outputs.images }}
 
   deploy:
     needs: [resolve, publish]
@@ -295,22 +312,23 @@ jobs:
       VALUES: ${{ needs.resolve.outputs.track == 'production' && 'helm/prod-values.yaml' || 'helm/staging-values.yaml' }}
 ```
 
-Branch eligibility is centralized in `resolve`; build/publish/deploy all require its success and a push, so no further branch gates need changing. The base build relevance gate already admits every release push, including no-new-image promotions. Deployment environment and concurrency follow the track automatically. Keep different target settings distinct; if chart directories differ too, add a conditional `CHART` entry to the overlay.
+Branch eligibility is centralized in `resolve`; both image builds, publish, and deploy all require its success and a push, so no further branch gates need changing. The publish relevance gate already admits every release push, including no-new-image releases where both image jobs skip. Deployment environment and concurrency follow the track automatically. Keep different target settings distinct; if chart directories differ too, add a conditional `CHART` entry to the overlay.
 
 ## Behavior And Recovery
 
 - PRs use documentation-excluding service path filters; `resolve` is skipped. Explicit `!cancelled()` lets requested PR suites run despite that skip. Pushes resolve on every eligible commit, including docs-only commits, and test exactly the requested image names.
 - Fingerprints hash Git object IDs for the **whole service tree**, including docs, and the workflow blob; the server also hashes its stable commit argument. Removing documentation from these fingerprints is unsafe when Docker can copy it. A service README push intentionally rebuilds that service, even though its PR suite was filtered. Root docs outside build contexts can be a no-op. Workflow changes request both images. Include shared inputs in PR filters as well as fingerprints.
-- Without a published baseline on a track, resolve requests both images. Bootstrap therefore tests, builds, publishes, and deploys both even on an otherwise irrelevant push. Thereafter a server-only change tests/builds server and retains web; the reverse applies to web. Helm-only changes publish/deploy retained refs without Docker setup or login. Unrelated main pushes skip build/publish/deploy when the build list is empty and the deploy filter is false. Release pushes still publish/deploy retained production refs in that case.
-- Failed/cancelled change detection, resolve, or requested tests prevent builds and publication. A partial Docker push does not advance the manifest baseline. Rerun failed jobs to retry, or push a fix: even a later unrelated push compares against the last published baseline and requests the still-unpublished images. Unique run/attempt tags avoid collisions; deployment uses digests, never branch tags or shared `latest`.
+- After resolve, `server -> build-server-image` and `web -> build-web-image` are independent parallel paths that join at `publish -> deploy`. Each image job requires its own requested suite to succeed, not the other suite. Publish requires every requested image job to succeed and every unrequested image job to be skipped; successful builds imply their required tests passed.
+- Without a published baseline on a track, resolve requests both images. Bootstrap therefore tests, builds, publishes, and deploys both even on an otherwise irrelevant push. Thereafter a server-only change tests/builds server and retains web; the reverse applies to web. Helm-only changes skip both image jobs and publish/deploy retained refs without Docker setup or login. Unrelated main pushes skip both image jobs, publish, and deploy when the build list is empty and the deploy filter is false. Release pushes still publish/deploy retained production refs in that case. Build jobs export scalar digests only; publish assembles the newly built refs, and the publish action supplies retained refs.
+- Failed/cancelled change detection or resolve blocks both image builds and publication. A failed/cancelled requested suite blocks its own image build and publication, but the independent image may already have been pushed. Any requested build failure also blocks publication; partial pushes do not advance the manifest baseline. Rerun failed jobs to retry, or push a fix: even a later unrelated push compares against the last published baseline and requests the still-unpublished images. Unique run/attempt tags avoid collisions; deployment uses digests, never branch tags or shared `latest`.
 - Publication means requested tests/builds succeeded, **not** that deployment succeeded. A failed Helm deployment leaves the release published; a later no-op main push is not an automatic retry. Rerun the failed deployment job with its original published refs rather than rebuilding an already-published run. The action accepts identical republication, rejects a different manifest for the same run, and rejects publishing an older run after a newer release. Do not assume rebuilding produces identical digests.
 - Publish concurrency is repository-wide per track; use the same group in every publisher. Deploy concurrency is per target: make its group identical across workflows deploying the same cluster/namespace/release, and distinct for different targets. Both avoid cancelling active jobs, but GitHub concurrency is not a FIFO queue and can replace pending jobs. Publication does not guarantee deployment order or prevent an older deploy from running later. Verify the current deployment before retrying an old job; strict ordering needs an additional target-side freshness mechanism.
 
 ## Optional Variants
 
-- **Store integration tests:** use the Postgres service and test steps from `reference.md`, matching the project's database configuration. Give `store` the same `needs: [changes, resolve]` and complete `if` expression as `server`. Add `store` to `build-image.needs` and add the same exact requested-server gate for `needs.store.result`: require `success` when `server` is in `resolve.build`, otherwise require `skipped`. Do not merely reject failure/cancellation, and do not skip release tests unconditionally.
-- **Sticky disk:** only on explicit opt-in, replace `docker/setup-buildx-action@v3` with `useblacksmith/setup-docker-builder@v2` and `cache-key: <app>-images`; replace both build actions with `useblacksmith/build-push-action@v2`. Remove `cache-from`/`cache-to`. Preserve setup/login conditions, build step IDs and conditions, build arguments, unique tags, job outputs, and each action's `digest` output consumed by `refs`. Verify the chosen action version exposes that output. Do not mix sticky-disk and GHA layer caches.
+- **Store integration tests:** use the Postgres service and test steps from `reference.md`, matching the project's database configuration. Give `store` the same `needs: [changes, resolve]` and complete `if` expression as `server`. Only `build-server-image` adds `store` to its `needs` and `needs.store.result == 'success'` to its existing job gate. Keep `build-web-image` independent of store. Publish enforces store success through the successful requested server build; no additional publish dependency is needed. Do not merely reject failure/cancellation, and do not skip release tests unconditionally.
+- **Sticky disk:** only on explicit opt-in, replace `docker/setup-buildx-action@v3` in EACH image job with `useblacksmith/setup-docker-builder@v2`, using separate `cache-key` values `<app>-server` and `<app>-web`; replace both build actions with `useblacksmith/build-push-action@v2`. Remove `cache-from`/`cache-to`. Preserve job gates, build step IDs, build arguments, unique tags, and scalar `digest` job outputs consumed by publish's `images` step. No setup/login/build step conditions are needed beyond the job gates. Verify the chosen action version exposes the digest output. Do not mix sticky-disk and GHA layer caches.
 
 ## Verification
 
-Compose each branch model separately, substitute verified project values and action pins, then run `actionlint` with the Blacksmith runner labels allowed. Check the gates for PRs with skipped resolve, bootstrap, each single-service change, service docs, unrelated root docs, Helm-only changes, failed/cancelled prerequisites, partial build failure followed by an unrelated push, and a no-new-images release merge. Confirm only `publish` has `contents: write`, its `images` input contains newly built refs only, and Helm receives both nonempty complete digest refs from the published `manifest` output. No local release-manifest implementation is required.
+Compose each branch model separately, substitute verified project values and action pins, then run `actionlint` with the Blacksmith runner labels allowed. Check the gates for PRs with skipped resolve, bootstrap, each single-service change, service docs, unrelated root docs, Helm-only changes, failed/cancelled prerequisites, partial build failure followed by an unrelated push, and a no-new-images release merge. Verify each image can build as soon as its own suite passes, even while the other suite runs or fails, but publication waits for all requested builds to succeed. Confirm Helm-only and no-new-images release pushes skip BOTH image jobs yet publish/deploy retained refs; healthy root-docs-only main pushes skip publication too. Check both cache variants use independent builders/cache keys or scopes on 4vcpu image runners, and optional store tests gate only the server build while still blocking publication on failure. Confirm registry-auth jobs export only scalar digests, publish's `images` step assembles new-ref JSON, only `publish` has `contents: write`, and Helm receives both nonempty complete digest refs from the published `manifest` output. No local release-manifest implementation is required.
